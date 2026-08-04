@@ -1,0 +1,81 @@
+name: nest-kit
+
+# Base stack with production-safe defaults: no database ports published to the
+# host, production build target, restart policies on. Overlay a target file:
+#   development -> docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#   production  -> docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+# The Makefile wraps both (`make dev` / `make prod`).
+
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    container_name: nest-kit-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+    volumes:
+      # Postgres 18+ declares its VOLUME at /var/lib/postgresql and sets
+      # PGDATA to the version-scoped /var/lib/postgresql/18/docker. Mounting
+      # the parent (not PGDATA itself, and not the pre-18 /data path) is what
+      # upstream documents: it avoids a stray anonymous volume and lets a
+      # future major upgrade use pg_upgrade --link across version subdirs.
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-appdb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.10-alpine
+    container_name: nest-kit-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ${DOCKER_TARGET:-production}
+    image: nest-kit-api:${IMAGE_TAG:-latest}
+    container_name: nest-kit-api
+    init: true
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-appdb}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "${API_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

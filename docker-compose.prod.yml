@@ -1,0 +1,36 @@
+name: nest-kit
+
+# Production overlay: pinned build target, bounded memory, and rotated logs so
+# a long-running container cannot fill the host disk.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY_LIMIT:-1g}
+
+  redis:
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-512m}
+
+  api:
+    build:
+      target: production
+    environment:
+      NODE_ENV: production
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: ${API_MEMORY_LIMIT:-512m}
