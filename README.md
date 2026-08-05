@@ -80,6 +80,26 @@ src/
 
 ---
 
+## Contexts
+
+| Context | Owns | Read it for |
+|---|---|---|
+| `identity` | users, credentials | the minimal context — the shape everything else follows |
+| `auth` | sessions, tokens | ES256, refresh rotation with replay detection, Redis revocation |
+| `owner` | car owners, linked to a user by uuid | a value object enforcing a domain rule; one-per-user uniqueness |
+| `car` | cars, linked to an owner by uuid | money as a decimal string; aggregate invariants; batch writes |
+| `notification` | queued notifications | the smallest possible durable subscriber |
+
+Each owns a Postgres schema of the same name. **No foreign keys cross a schema
+boundary** — a cross-context reference is a `uuid` column, and integrity is
+checked in the use case against the other context's port. That is what makes
+any of them liftable into its own service (§10).
+
+`owner` and `car` are the pair to copy when adding a context; see
+[Adding a bounded context](#adding-a-bounded-context).
+
+---
+
 ## Authentication
 
 **Access is denied by default.** The guard is global, so a new route is protected the moment it exists. Public routes opt out explicitly with `@Public()`, which makes every unauthenticated entry point greppable:
@@ -402,7 +422,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | HTTP: response envelope, single error filter, validation pipe, Swagger |
 | ✅ | Architecture gate (`check-arch.mjs`), 7 rules, verified against real violations |
 | ✅ | Strict TypeScript, eslint, prettier |
-| ❌ | CI pipeline (GitHub Actions with Postgres + NATS services) |
+| ❌ | CI pipeline (GitHub Actions with Postgres, Redis and NATS services) |
 
 ### Persistence
 
@@ -454,8 +474,8 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 | | Item |
 |---|---|
-| ✅ | 46 unit tests — domain, use cases, transactions, serialisation |
-| ✅ | 27 e2e tests against live Postgres + NATS |
+| ✅ | 103 unit tests — domain, value objects, use cases, transactions, serialisation |
+| ✅ | 63 e2e tests against live Postgres, Redis and NATS |
 | ✅ | Shared `configureApp()` so tests cannot drift from production wiring |
 | ❌ | Load / soak testing |
 | ❌ | Coverage thresholds enforced in CI |
