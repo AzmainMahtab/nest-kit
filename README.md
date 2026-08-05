@@ -486,7 +486,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | | Item |
 |---|---|
 | ✅ | 103 unit tests — domain, value objects, use cases, transactions, serialisation |
-| ✅ | 63 e2e tests against live Postgres, Redis and NATS |
+| ✅ | 71 e2e tests against live Postgres, Redis and NATS |
 | ✅ | Shared `configureApp()` so tests cannot drift from production wiring |
 | ❌ | Load / soak testing |
 | ❌ | Coverage thresholds enforced in CI |
@@ -494,6 +494,10 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 ---
 
 ## Troubleshooting
+
+**`GET /api` returns 404.** Expected. `/api` is the global *prefix*, not a route — nothing is mounted at the bare prefix, and there is no root route either. The well-formed error envelope you get back is the filter working. Go to **`/docs`**.
+
+**A route 404s in the browser but works in `curl`.** A browser only issues `GET`. `POST /api/auth/login` is POST-only, and Nest matches method and path together, so a `GET` is simply an unmatched route. Use `/docs` and its *Try it out*, or `curl -X POST`.
 
 **`401` on every route.** Expected — access is denied by default. Get a token (see [Authentication](#authentication)) or mark the route `@Public()`.
 
