@@ -55,6 +55,14 @@ export class DeadLetterRepository {
     );
   }
 
+  async countFor(consumerName: string): Promise<number> {
+    const rows = await this.dataSource.query<{ count: string }[]>(
+      'SELECT COUNT(*)::text AS count FROM messaging.dead_letters WHERE consumer_name = $1',
+      [consumerName],
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
   async count(): Promise<number> {
     const rows = await this.dataSource.query<{ count: string }[]>(
       'SELECT COUNT(*)::text AS count FROM messaging.dead_letters',

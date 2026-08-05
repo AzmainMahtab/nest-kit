@@ -12,6 +12,15 @@ export interface OutboxRow {
   occurred_at: Date;
   payload: Record<string, unknown>;
   attempts: number;
+  last_error?: string | null;
+  dead_lettered_at?: Date | null;
+}
+
+export interface OutboxStats {
+  pending: number;
+  deadLettered: number;
+  oldestPendingAt: Date | null;
+  oldestPendingAgeSeconds: number | null;
 }
 
 @Injectable()
@@ -102,6 +111,47 @@ export class OutboxRepository {
               dead_lettered_at = CASE WHEN attempts >= $3 THEN NOW() ELSE NULL END
         WHERE id = $1`,
       [id, error.slice(0, 2000), maxAttempts],
+    );
+  }
+
+  /**
+   * Backlog in one round trip. `oldest_pending_at` matters more than the count:
+   * a steady backlog of ten is healthy, but one row stuck for an hour means the
+   * relay is not draining.
+   */
+  async stats(): Promise<OutboxStats> {
+    const rows = await this.dataSource.query<
+      { pending: string; dead_lettered: string; oldest_pending_at: Date | null }[]
+    >(
+      `SELECT
+         COUNT(*) FILTER (WHERE published_at IS NULL AND dead_lettered_at IS NULL)::text AS pending,
+         COUNT(*) FILTER (WHERE dead_lettered_at IS NOT NULL)::text                      AS dead_lettered,
+         MIN(created_at) FILTER (WHERE published_at IS NULL AND dead_lettered_at IS NULL) AS oldest_pending_at
+       FROM outbox.events`,
+    );
+
+    const row = rows[0];
+    const oldest = row?.oldest_pending_at ?? null;
+
+    return {
+      pending: Number(row?.pending ?? 0),
+      deadLettered: Number(row?.dead_lettered ?? 0),
+      oldestPendingAt: oldest,
+      oldestPendingAgeSeconds: oldest
+        ? Math.max(0, Math.floor((Date.now() - oldest.getTime()) / 1000))
+        : null,
+    };
+  }
+
+  listDeadLettered(limit = 100): Promise<OutboxRow[]> {
+    return this.dataSource.query<OutboxRow[]>(
+      `SELECT id, name, version, idempotency_key, occurred_at, payload, attempts, last_error,
+              dead_lettered_at
+         FROM outbox.events
+        WHERE dead_lettered_at IS NOT NULL
+        ORDER BY id DESC
+        LIMIT $1`,
+      [limit],
     );
   }
 

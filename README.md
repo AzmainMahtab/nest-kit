@@ -130,7 +130,16 @@ Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }
 | `POST` | `/api/auth/login` | public |
 | `POST` | `/api/auth/refresh` | public |
 | `POST` | `/api/auth/logout` | bearer |
+| `GET` | `/api/admin/messaging/status` | bearer ⚠️ |
+| `GET` | `/api/admin/messaging/outbox/dead-lettered` | bearer ⚠️ |
+| `POST` | `/api/admin/messaging/outbox/replay` | bearer ⚠️ |
+| `GET` | `/api/admin/messaging/dead-letters` | bearer ⚠️ |
+| `POST` | `/api/admin/messaging/dead-letters/discard` | bearer ⚠️ |
 | `GET` | `/health` | public, outside the API prefix |
+
+⚠️ The admin routes are authenticated but **not yet authorised** — any logged-in
+user can replay and discard events. Restrict them with `@Roles('admin')` when
+RBAC lands, or keep them off the public ingress.
 
 Full schemas at `/docs` when not in production.
 
@@ -386,8 +395,9 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | Outbox retry, dead-lettering and replay |
 | ✅ | Durable consumers with transactional idempotency markers |
 | ✅ | Consumer DLQ + config reconciliation on boot |
-| 🚧 | Dead-letter admin — repository methods exist, no HTTP surface |
-| ❌ | Consumer lag / backlog metrics |
+| ✅ | Dead-letter admin API — inspect, replay, discard |
+| ✅ | Backlog and per-consumer lag via `GET /admin/messaging/status` |
+| ❌ | Prometheus scrape endpoint (belongs with observability) |
 
 ### Contexts
 
@@ -436,7 +446,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 **`SyntaxError: Unexpected token 'export'` from jose.** It is ESM-only and jest's runtime is CJS. Both jest configs carry `transformIgnorePatterns: ["node_modules/(?!.*jose)"]`; the naive `(?!jose)` fails because pnpm nests packages under `.pnpm/`.
 
-**Events never reach a consumer.** Check `outbox.events`: `published_at IS NULL` means the relay is not draining (is NATS up? is `OUTBOX_ENABLED` true?); a set `dead_lettered_at` means publishing failed `OUTBOX_MAX_ATTEMPTS` times — see `last_error`. If rows are published but nothing reacts, look in `messaging.dead_letters`.
+**Events never reach a consumer.** Start at `GET /api/admin/messaging/status`. A rising `outbox.pending` with a growing `oldestPendingAgeSeconds` means the relay is not draining (is NATS up? is `OUTBOX_ENABLED` true?). `outbox.deadLettered` above zero means publishing failed `OUTBOX_MAX_ATTEMPTS` times — list them at `outbox/dead-lettered` to see `lastError`, then `POST outbox/replay`. If the outbox is clear but nothing reacts, check the consumer: `present: false` means it failed to start, rising `redelivered` without `pending` falling means the handler keeps throwing, and `deadLetters` above zero means it gave up — inspect at `dead-letters`.
 
 **"consumer already exists" at boot.** A durable consumer's configuration changed. It is reconciled automatically; if it still fails the consumer is skipped and logged rather than taking the API down.
 

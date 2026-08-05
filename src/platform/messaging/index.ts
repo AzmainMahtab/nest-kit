@@ -7,3 +7,5 @@ export type { EventMessage } from './durable-event-handler';
 export { ProcessedEventRepository } from './processed-event.repository';
 export { DeadLetterRepository } from './dead-letter.repository';
 export type { DeadLetterRow } from './dead-letter.repository';
+export { MessagingMetricsService } from './messaging-metrics.service';
+export type { MessagingStatus, ConsumerLag } from './messaging-metrics.service';
