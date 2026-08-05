@@ -40,7 +40,7 @@ pnpm start:dev                # or: make dev  (full stack in Docker)
 
 - API: `http://localhost:3000/api`
 - Health: `http://localhost:3000/health` (deliberately outside the API prefix)
-- Swagger: `http://localhost:3000/docs` (non-production only)
+- Swagger UI: `http://localhost:3000/docs` — see [API documentation](#api-documentation)
 
 ---
 
@@ -165,15 +165,57 @@ Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }
 user can replay and discard events. Restrict them with `@Roles('admin')` when
 RBAC lands, or keep them off the public ingress.
 
-Full schemas at **`/docs`**, raw spec at `/docs-json`, and `pnpm openapi:export`
-writes it to a file for client generation.
+Full schemas and a live console at [`/docs`](#api-documentation).
 
-**Responses in the spec are enveloped.** A `201` on `POST /api/users` documents
-`{ success, data: UserResponseDto }`, not a bare `UserResponseDto` — a spec that
-described the inner object would generate clients that fail to unwrap `data`.
+---
+
+## API documentation
+
+| | |
+|---|---|
+| **Swagger UI** | **http://localhost:3000/docs** |
+| Raw OpenAPI document | `http://localhost:3000/docs-json` |
+| Written to a file | `pnpm openapi:export [file]` — defaults to `openapi.json`, gitignored |
+
+### Calling a protected route from the UI
+
+Everything except registration, login, refresh and the health probe shows a
+padlock. To unlock them:
+
+1. **`POST /api/users`** — register. Public, so no token needed.
+2. **`POST /api/auth/login`** — copy `data.accessToken` from the response.
+3. Click **Authorize** (top right), paste the token, **Close**.
+4. Every padlocked route now works from *Try it out*.
+
+The token is kept in browser storage (`persistAuthorization`), so it survives a
+page reload — paste it once per session rather than after every refresh.
+
+### Configuration
+
+| Variable | Default | |
+|---|---|---|
+| `SWAGGER_ENABLED` | on unless `NODE_ENV=production` | set `true` to expose it in production, `false` to hide it anywhere |
+| `SWAGGER_PATH` | `docs` | serve the UI somewhere else |
+| `APP_VERSION` | `0.0.1` | shown as the document version; set it from the image tag |
+
+Both the UI and `/docs-json` follow `SWAGGER_PATH`, and neither is registered at
+all when disabled — the switch is configuration, not an `if` in `main.ts`.
+
+### The spec matches what is sent
+
+A `201` on `POST /api/users` documents `{ success, data: UserResponseDto }`, not
+a bare `UserResponseDto`. That distinction is the whole point: a spec describing
+the inner object generates clients that never unwrap `data` and fail on the
+first call.
+
 Failures document `error.code` as the schema example, so the value to match on
-is machine-readable rather than prose. Bearer auth is declared on exactly the
-routes the guard protects, asserted by a test over every route.
+is machine-readable rather than prose in a description. Bearer auth is declared
+on exactly the routes the guard protects — a class-level `@ApiBearerAuth()` on a
+controller with a `@Public()` route would claim registration needs a token.
+
+Four tests hold this true: every 2xx JSON response must wrap the envelope; the
+documented fields must equal the keys of a real `201`; and of a real `409`; and
+the declared security must match the routes the guard actually leaves open.
 
 ---
 
