@@ -13,6 +13,12 @@ services:
     ports:
       - "${REDIS_PORT:-6379}:6379"
 
+  nats:
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      # Monitoring endpoint: /healthz, /jsz, /varz.
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+
   api:
     build:
       target: development

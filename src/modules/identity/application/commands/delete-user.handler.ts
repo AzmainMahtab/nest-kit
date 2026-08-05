@@ -15,7 +15,7 @@ export class DeleteUserHandler implements ICommandHandler<DeleteUserCommand, voi
   ) {}
 
   async execute(command: DeleteUserCommand): Promise<void> {
-    const user = await this.uow.withTransaction(async () => {
+    await this.uow.withTransaction(async () => {
       const found = await this.users.findByUuid(command.uuid);
 
       if (!found || found.isDeleted) {
@@ -24,9 +24,7 @@ export class DeleteUserHandler implements ICommandHandler<DeleteUserCommand, voi
 
       found.delete(this.clock.now());
       await this.users.save(found);
-      return found;
+      await this.events.publishAll(found.pullEvents());
     });
-
-    await this.events.publishAll(user.pullEvents());
   }
 }

@@ -82,11 +82,14 @@ sh: ## Open a shell in the api container
 # DATABASES
 # ==========================================
 
-db-up: ## Start only Postgres and Redis (for running the app on the host)
-	$(DEV) up -d postgres redis
+db-up: ## Start Postgres, Redis and NATS (for running the app on the host)
+	$(DEV) up -d postgres redis nats
 
-db-down: ## Stop Postgres and Redis
-	docker compose stop postgres redis
+db-down: ## Stop Postgres, Redis and NATS
+	docker compose stop postgres redis nats
+
+nats-info: ## Show JetStream stream state
+	@curl -s http://127.0.0.1:$(or $(NATS_MONITOR_PORT),8222)/jsz?streams=1 | head -40
 
 psql: ## Open a psql shell
 	docker compose exec postgres psql -U $(or $(POSTGRES_USER),app) -d $(or $(POSTGRES_DB),appdb)

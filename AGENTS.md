@@ -221,15 +221,21 @@ Public endpoints never bind privilege-bearing fields (`role`, `status`, `ownerId
 
 ## 7. Events
 
-### Domain events — in-process, best effort
+### Domain events — durable via the outbox
 
-Use `@nestjs/cqrs`'s bus behind our own `EventBus` port. Do **not** extend `AggregateRoot` — its `apply()`/`commit()` pattern drags `@nestjs/cqrs` into `domain/`, violating §2. Publish from the use case:
+Use `@nestjs/cqrs`'s bus behind our own `EventBus` port. Do **not** extend `AggregateRoot` — its `apply()`/`commit()` pattern drags `@nestjs/cqrs` into `domain/`, violating §2. The aggregate *records* events; the use case publishes them:
 
 ```ts
-await this.events.publish(new UserRegistered({ userUuid: user.uuid }));
+return this.uow.withTransaction(async () => {
+  await this.users.save(user);
+  await this.events.publishAll(user.pullEvents());   // inside the transaction
+  return user;
+});
 ```
 
-- Published **after** the write succeeds, and **after** the transaction commits (§8).
+- **Publish inside the transaction.** `EventBus` routes the event into `outbox.events` on the same connection, so it commits or rolls back with the data that produced it. The `UnitOfWork` dispatches to in-process `@EventsHandler`s only *after* the commit, so a handler still never sees a rolled-back write.
+- Outside a transaction, `publish` dispatches in-process immediately.
+- There is **one** `publish`. Call sites never choose a durability mode — fast-kit's `publish` vs `publish_durable` split makes every call site a chance to silently drop an event that everyone assumes is durable.
 - Event name format: `<context>.<aggregate>.<past-tense-verb>` — e.g. `identity.user.registered`.
 - Every event extends `shared/domain/DomainEvent`, which carries `version` and `idempotencyKey`.
 - Handlers live in `infrastructure/event-handlers/` in the **consuming** context, registered with `@EventsHandler(SomeEvent)`.
@@ -241,9 +247,18 @@ The `EventBus` port exists — rather than injecting `@nestjs/cqrs`'s `EventBus`
 
 A context reads another context's events. It does not import its services, repositories, or entities. The only compile-time coupling permitted between contexts is the published event class and the context's `index.ts`.
 
-### Audit / durable events — deferred
+### The outbox and the relay
 
-Not in the kit yet. When needed, the path is: transactional outbox table written inside the caller's transaction → relay after commit → NATS JetStream → durable consumer. Declare `publishDurable` on the port before writing the first durable event; do not build the outbox speculatively.
+`outbox.events` is written inside the caller's transaction. `OutboxRelay` polls committed rows, publishes to NATS JetStream on `evt.<event.name>`, and marks them published **only after the broker acknowledges persistence**.
+
+- Delivery is **at-least-once**. A crash between publish and mark re-sends, so every message carries `idempotencyKey` and **consumers must be idempotent**.
+- `FOR UPDATE SKIP LOCKED` lets multiple API replicas relay concurrently without racing on the same row.
+- After `OUTBOX_MAX_ATTEMPTS` failures a row is dead-lettered and skipped. `replayDeadLettered` revives it. Every failed publish is logged, not just the final one.
+- A broker outage is not an API outage: events accumulate in the outbox and drain when NATS returns.
+
+Raw SQL in this layer wraps every `UPDATE ... RETURNING` in a CTE ending in a `SELECT`. TypeORM's `query()` returns `[rows, affectedCount]` for update-shaped commands and a plain row array for selects; wrapping keeps the return shape predictable rather than driver-dependent.
+
+**Not built yet:** a durable consumer. In a single process the in-process bus already delivers after commit, so consuming our own stream would be a loop. The consumer arrives with the first extracted service — the messages already carry what it needs to dedup.
 
 ---
 
@@ -259,7 +274,9 @@ await this.uow.withTransaction(async () => {
 await this.events.publish(new OrderCreated({ orderUuid: order.uuid }));
 ```
 
-Wrap any use case that performs more than one write. **Publish events after the transaction commits, never inside it** — an event published inside a transaction that later rolls back is a lie the rest of the system acts on.
+Wrap any use case that performs more than one write. Events are published *inside* the block (§7) — the outbox row is what makes that safe, and the `UnitOfWork` holds in-process dispatch until after the commit.
+
+Nested `withTransaction` calls join the transaction in progress rather than opening a savepoint, and only the outermost call flushes the outbox.
 
 ---
 

@@ -17,7 +17,7 @@ export class UpdateUserHandler implements ICommandHandler<UpdateUserCommand, Use
   ) {}
 
   async execute(command: UpdateUserCommand): Promise<User> {
-    const user = await this.uow.withTransaction(async () => {
+    return this.uow.withTransaction(async () => {
       const found = await this.users.findByUuid(command.uuid);
 
       if (!found || found.isDeleted) {
@@ -42,11 +42,8 @@ export class UpdateUserHandler implements ICommandHandler<UpdateUserCommand, Use
       }
 
       await this.users.save(found);
+      await this.events.publishAll(found.pullEvents());
       return found;
     });
-
-    await this.events.publishAll(user.pullEvents());
-
-    return user;
   }
 }

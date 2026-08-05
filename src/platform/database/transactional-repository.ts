@@ -18,6 +18,6 @@ export abstract class TransactionalRepository {
   ) {}
 
   protected manager(): EntityManager {
-    return this.context.current() ?? this.dataSource.manager;
+    return this.context.currentManager() ?? this.dataSource.manager;
   }
 }

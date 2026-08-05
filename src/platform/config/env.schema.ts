@@ -17,6 +17,21 @@ export const envSchema = z.object({
   REDIS_PORT: z.coerce.number().int().positive().default(6379),
   REDIS_URL: z.string().optional(),
 
+  NATS_URL: z.string().default('nats://localhost:4222'),
+  NATS_MAX_AGE_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(7 * 24 * 60 * 60 * 1000),
+
+  OUTBOX_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  OUTBOX_INTERVAL_MS: z.coerce.number().int().positive().default(1000),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().max(1000).default(100),
+  OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),
   JWT_ACCESS_TTL: z.string().default('15m'),

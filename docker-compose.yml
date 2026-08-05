@@ -41,6 +41,21 @@ services:
       retries: 5
     restart: unless-stopped
 
+  nats:
+    image: nats:2.14.4-alpine
+    container_name: nest-kit-nats
+    # JetStream is what makes delivery durable; without -js the outbox relay
+    # would publish into a fire-and-forget core-NATS subject.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -61,6 +76,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
       API_PREFIX: ${API_PREFIX:-api}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
     ports:
@@ -78,8 +94,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      nats:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
+  nats_data:

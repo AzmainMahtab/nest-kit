@@ -60,6 +60,22 @@ export class AppConfig {
     };
   }
 
+  get nats() {
+    return {
+      url: this.get('NATS_URL'),
+      maxAgeMs: this.get('NATS_MAX_AGE_MS'),
+    };
+  }
+
+  get outbox() {
+    return {
+      enabled: this.get('OUTBOX_ENABLED'),
+      intervalMs: this.get('OUTBOX_INTERVAL_MS'),
+      batchSize: this.get('OUTBOX_BATCH_SIZE'),
+      maxAttempts: this.get('OUTBOX_MAX_ATTEMPTS'),
+    };
+  }
+
   get jwt() {
     return {
       privateKeyPath: this.get('JWT_PRIVATE_KEY_PATH'),

@@ -20,7 +20,11 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand,
   async execute(command: RegisterUserCommand): Promise<User> {
     const email = Email.of(command.email);
 
-    const user = await this.uow.withTransaction(async () => {
+    // Published inside the transaction: the bus routes the event into the
+    // outbox on the same connection, so it commits or rolls back with the user.
+    // The UnitOfWork dispatches to in-process handlers only after the commit
+    // (AGENTS.md §7).
+    return this.uow.withTransaction(async () => {
       // The unique index is the real guard against a concurrent duplicate; this
       // check exists to return a domain error instead of a driver error in the
       // ordinary case.
@@ -34,13 +38,8 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand,
         this.clock.now(),
       );
       await this.users.save(created);
+      await this.events.publishAll(created.pullEvents());
       return created;
     });
-
-    // After commit, never inside — an event for a rolled-back write is a lie
-    // the rest of the system acts on (AGENTS.md §8).
-    await this.events.publishAll(user.pullEvents());
-
-    return user;
   }
 }
