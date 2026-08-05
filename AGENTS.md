@@ -316,7 +316,9 @@ Nested `withTransaction` calls join the transaction in progress rather than open
 | Commands | Plain classes in `application/commands/`. No decorators, no validation |
 | Controllers | Decode → build command/query → `commandBus.execute()` → map result. No business logic, no repository access |
 | Validation | Global `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })` |
-| Swagger | `@ApiTags` on every controller, `@ApiOperation` + `@ApiResponse` on every method |
+| Swagger | `@ApiTags` on every controller, `@ApiOperation` on every method |
+| Documented responses | `@ApiEnvelope(Dto, { status })` and `@ApiFailure(status, 'CODE')` — never bare `@ApiResponse({ type })`. The controller returns the inner DTO but the interceptor sends `{ success, data }`, so a bare type documents a shape that is never sent |
+| Documented auth | `@ApiBearerAuth()` per method on a controller that mixes public and protected routes. At class level it would claim a `@Public()` route needs a token |
 | Pagination | `Page<T>` from `shared/pagination`; `limit` capped at `MAX_PAGE_SIZE` |
 | CORS | Explicit origin allowlist from config. Never `*` with credentials |
 | Config | `platform/config` only. Direct `process.env` outside it is a lint error |

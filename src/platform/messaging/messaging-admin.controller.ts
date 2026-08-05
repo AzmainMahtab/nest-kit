@@ -1,11 +1,23 @@
 import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import {
+  ApiAuthFailures,
+  ApiEnvelope,
+  ApiEnvelopeArray,
+  ApiValidationFailure,
+} from '../http/swagger';
 import { OutboxRelay } from '../outbox/outbox.relay';
 import { OutboxRepository } from '../outbox/outbox.repository';
 import { DeadLetterRepository } from './dead-letter.repository';
 import { DiscardDeadLetterDto, ReplayOutboxDto } from './dto/messaging-admin.dto';
-import { MessagingMetricsService, MessagingStatus } from './messaging-metrics.service';
+import {
+  ConsumerDeadLetterDto,
+  MessagingStatusDto,
+  OutboxDeadLetterDto,
+  ReplayResultDto,
+} from './dto/messaging-status.dto';
+import { MessagingMetricsService } from './messaging-metrics.service';
 
 /**
  * Operational surface for the event pipeline: how far behind it is, what got
@@ -17,6 +29,7 @@ import { MessagingMetricsService, MessagingStatus } from './messaging-metrics.se
  */
 @ApiTags('Messaging admin')
 @ApiBearerAuth()
+@ApiAuthFailures()
 @Controller('admin/messaging')
 export class MessagingAdminController {
   constructor(
@@ -27,14 +40,21 @@ export class MessagingAdminController {
   ) {}
 
   @Get('status')
-  @ApiOperation({ summary: 'Outbox backlog, stream state and per-consumer lag' })
-  status(): Promise<MessagingStatus> {
+  @ApiOperation({
+    summary: 'Outbox backlog, stream state and per-consumer lag',
+    description:
+      'Start here when events stop flowing. A rising outbox points at the relay or the broker; rising consumer `pending` points at a slow or dead handler.',
+  })
+  @ApiEnvelope(MessagingStatusDto, { status: 200 })
+  status(): Promise<MessagingStatusDto> {
     return this.metrics.status();
   }
 
   @Get('outbox/dead-lettered')
   @ApiOperation({ summary: 'Outbox rows that exhausted their publish attempts' })
-  async outboxDeadLettered(@Query('limit') limit?: string) {
+  @ApiQuery({ name: 'limit', required: false, schema: { default: 100, maximum: 500 } })
+  @ApiEnvelopeArray(OutboxDeadLetterDto, { status: 200 })
+  async outboxDeadLettered(@Query('limit') limit?: string): Promise<OutboxDeadLetterDto[]> {
     const rows = await this.outbox.listDeadLettered(boundedLimit(limit));
 
     return rows.map((row) => ({
@@ -50,12 +70,15 @@ export class MessagingAdminController {
 
   @Post('outbox/replay')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Clear the dead-letter state so the relay retries' })
-  @ApiResponse({ status: 200, description: '{ replayed, drained }' })
-  async replayOutbox(@Body() dto: ReplayOutboxDto): Promise<{ replayed: number; drained: number }> {
+  @ApiOperation({
+    summary: 'Clear the dead-letter state so the relay retries',
+    description:
+      'Drains in the same request, so the result says whether the replay actually published.',
+  })
+  @ApiEnvelope(ReplayResultDto, { status: 200 })
+  @ApiValidationFailure()
+  async replayOutbox(@Body() dto: ReplayOutboxDto): Promise<ReplayResultDto> {
     const replayed = await this.outbox.replayDeadLettered(dto.ids ?? []);
-    // Drain immediately rather than leaving the operator to wait for the next
-    // tick and wonder whether the replay did anything.
     const drained = await this.relay.tick();
 
     return { replayed, drained };
@@ -63,7 +86,9 @@ export class MessagingAdminController {
 
   @Get('dead-letters')
   @ApiOperation({ summary: 'Messages a consumer could not process' })
-  async consumerDeadLetters(@Query('limit') limit?: string) {
+  @ApiQuery({ name: 'limit', required: false, schema: { default: 100, maximum: 500 } })
+  @ApiEnvelopeArray(ConsumerDeadLetterDto, { status: 200 })
+  async consumerDeadLetters(@Query('limit') limit?: string): Promise<ConsumerDeadLetterDto[]> {
     const rows = await this.deadLetters.list(boundedLimit(limit));
 
     return rows.map((row) => ({
@@ -82,6 +107,8 @@ export class MessagingAdminController {
   @ApiOperation({
     summary: 'Drop a dead letter and its processed marker so a redelivery is handled afresh',
   })
+  @ApiResponse({ status: 204, description: 'Discarded; no body' })
+  @ApiValidationFailure()
   async discard(@Body() dto: DiscardDeadLetterDto): Promise<void> {
     await this.deadLetters.discard(dto.consumerName, dto.idempotencyKey);
   }

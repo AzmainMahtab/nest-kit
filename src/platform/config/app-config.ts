@@ -60,6 +60,17 @@ export class AppConfig {
     };
   }
 
+  get version(): string {
+    return this.get('APP_VERSION');
+  }
+
+  get swagger() {
+    return {
+      enabled: this.get('SWAGGER_ENABLED') ?? !this.isProduction,
+      path: this.get('SWAGGER_PATH'),
+    };
+  }
+
   get nats() {
     return {
       url: this.get('NATS_URL'),

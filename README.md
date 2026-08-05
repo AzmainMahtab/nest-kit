@@ -165,7 +165,15 @@ Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }
 user can replay and discard events. Restrict them with `@Roles('admin')` when
 RBAC lands, or keep them off the public ingress.
 
-Full schemas at `/docs` when not in production.
+Full schemas at **`/docs`**, raw spec at `/docs-json`, and `pnpm openapi:export`
+writes it to a file for client generation.
+
+**Responses in the spec are enveloped.** A `201` on `POST /api/users` documents
+`{ success, data: UserResponseDto }`, not a bare `UserResponseDto` — a spec that
+described the inner object would generate clients that fail to unwrap `data`.
+Failures document `error.code` as the schema example, so the value to match on
+is machine-readable rather than prose. Bearer auth is declared on exactly the
+routes the guard protects, asserted by a test over every route.
 
 ---
 
@@ -298,6 +306,7 @@ Every persistence adapter extends `TransactionalRepository` and goes through `ma
 | Controllers | decode → dispatch → map. No business logic, no repository access |
 | Validation | global `ValidationPipe({ whitelist, forbidNonWhitelisted, transform })` |
 | Config | `platform/config` only — `process.env` elsewhere is a gate failure |
+| Docs | `@ApiEnvelope` / `@ApiFailure`, never bare `@ApiResponse({ type })` — the raw DTO is not what goes on the wire |
 | Money | never `number`; a decimal string end to end |
 | CORS | explicit allowlist, never `*` with credentials |
 
@@ -403,6 +412,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | `make migrate-create NAME=X` | New empty migration |
 | `make migrate-up` / `migrate-down` / `migrate-status` | Apply / revert / inspect |
 | `make keygen` | ES256 keypair into `certs/` |
+| `pnpm openapi:export [file]` | Write the OpenAPI document (default `openapi.json`) |
 | `make psql` / `make redis-cli` / `make nats-info` | Inspect infrastructure |
 | `make clean` | Remove containers, volumes and the built image |
 
@@ -419,7 +429,8 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | Docker dev + prod stacks, non-root, healthchecks, log rotation |
 | ✅ | Shared kernel — `AppError`, `DomainEvent`, ports, pagination |
 | ✅ | zod-validated config, single `AppConfig` reader |
-| ✅ | HTTP: response envelope, single error filter, validation pipe, Swagger |
+| ✅ | HTTP: response envelope, single error filter, validation pipe |
+| ✅ | OpenAPI — envelope-accurate schemas, error codes, exportable spec |
 | ✅ | Architecture gate (`check-arch.mjs`), 7 rules, verified against real violations |
 | ✅ | Strict TypeScript, eslint, prettier |
 | ❌ | CI pipeline (GitHub Actions with Postgres, Redis and NATS services) |

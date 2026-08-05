@@ -1,7 +1,13 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import {
+  ApiAuthFailures,
+  ApiEnvelope,
+  ApiFailure,
+  ApiValidationFailure,
+} from '../../../../platform/http/swagger';
 import { Page, PaginationParams } from '../../../../shared/pagination';
 import {
   RegisterCarCommand,
@@ -23,6 +29,7 @@ import {
 
 @ApiTags('Cars')
 @ApiBearerAuth()
+@ApiAuthFailures()
 @Controller('cars')
 export class CarsController {
   constructor(
@@ -32,9 +39,10 @@ export class CarsController {
 
   @Post()
   @ApiOperation({ summary: 'Register a car to an active owner' })
-  @ApiResponse({ status: 201, type: CarResponseDto })
-  @ApiResponse({ status: 409, description: 'PLATE_ALREADY_REGISTERED' })
-  @ApiResponse({ status: 400, description: 'OWNER_NOT_ACCEPTING_CARS' })
+  @ApiEnvelope(CarResponseDto, { status: 201, description: 'Registered' })
+  @ApiValidationFailure()
+  @ApiFailure(400, 'OWNER_NOT_ACCEPTING_CARS', 'The owner does not exist or is inactive')
+  @ApiFailure(409, 'PLATE_ALREADY_REGISTERED', 'Plates are compared after normalisation')
   async register(@Body() dto: RegisterCarDto): Promise<CarResponseDto> {
     const car = await this.commands.execute<RegisterCarCommand, Car>(
       new RegisterCarCommand(
@@ -53,7 +61,7 @@ export class CarsController {
 
   @Get()
   @ApiOperation({ summary: 'List cars, optionally filtered by owner' })
-  @ApiResponse({ status: 200, type: CarPageDto })
+  @ApiEnvelope(CarPageDto, { status: 200, description: 'A page of cars' })
   async list(@Query() dto: ListCarsDto): Promise<CarPageDto> {
     const page = await this.queries.execute<ListCarsQuery, Page<Car>>(
       new ListCarsQuery(new PaginationParams(dto.page, dto.limit), dto.ownerUuid),
@@ -63,8 +71,8 @@ export class CarsController {
 
   @Get(':uuid')
   @ApiOperation({ summary: 'Get a car' })
-  @ApiResponse({ status: 200, type: CarResponseDto })
-  @ApiResponse({ status: 404, description: 'CAR_NOT_FOUND' })
+  @ApiEnvelope(CarResponseDto, { status: 200 })
+  @ApiFailure(404, 'CAR_NOT_FOUND')
   async get(@Param('uuid', ParseUUIDPipe) uuid: string): Promise<CarResponseDto> {
     const car = await this.queries.execute<GetCarQuery, Car>(new GetCarQuery(uuid));
     return CarResponseDto.from(car);
@@ -72,8 +80,9 @@ export class CarsController {
 
   @Patch(':uuid/transfer')
   @ApiOperation({ summary: 'Transfer a car to another active owner' })
-  @ApiResponse({ status: 200, type: CarResponseDto })
-  @ApiResponse({ status: 409, description: 'CAR_RETIRED' })
+  @ApiEnvelope(CarResponseDto, { status: 200 })
+  @ApiFailure(400, 'SAME_OWNER_TRANSFER', 'The car already belongs to that owner')
+  @ApiFailure(409, 'CAR_RETIRED', 'A retired car cannot be modified')
   async transfer(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: TransferCarDto,
@@ -86,7 +95,12 @@ export class CarsController {
 
   @Patch(':uuid/price')
   @ApiOperation({ summary: 'Reprice a car' })
-  @ApiResponse({ status: 200, type: CarResponseDto })
+  @ApiEnvelope(CarResponseDto, {
+    status: 200,
+    description: 'Amount is a decimal string, never a float',
+  })
+  @ApiValidationFailure()
+  @ApiFailure(409, 'CAR_RETIRED')
   async reprice(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: RepriceCarDto,
@@ -99,7 +113,11 @@ export class CarsController {
 
   @Patch(':uuid/retire')
   @ApiOperation({ summary: 'Retire a car' })
-  @ApiResponse({ status: 200, type: CarResponseDto })
+  @ApiEnvelope(CarResponseDto, {
+    status: 200,
+    description: 'Idempotent: already retired is a success',
+  })
+  @ApiFailure(404, 'CAR_NOT_FOUND')
   async retire(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: RetireCarDto,
