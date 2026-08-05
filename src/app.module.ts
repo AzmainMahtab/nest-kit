@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 
+import { AuthModule } from './modules/auth';
 import { IdentityModule } from './modules/identity';
 import { NotificationModule } from './modules/notification';
+import { CacheModule } from './platform/cache/cache.module';
 import { ConfigModule } from './platform/config';
 import { CryptoModule } from './platform/crypto/crypto.module';
 import { DatabaseModule } from './platform/database';
@@ -17,9 +19,11 @@ import { OutboxModule } from './platform/outbox';
     OutboxModule,
     DatabaseModule,
     CryptoModule,
+    CacheModule,
     EventBusModule,
     HealthModule,
     IdentityModule,
+    AuthModule,
     NotificationModule,
   ],
 })

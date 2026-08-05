@@ -22,7 +22,7 @@ The authoritative rules live in [`AGENTS.md`](AGENTS.md). This README summarises
 | Migrations | TypeORM CLI, `synchronize: false` everywhere |
 | Messaging | NATS 2.14 JetStream |
 | Passwords | Argon2id (`@node-rs/argon2`) |
-| Tokens | ES256 (ECDSA P-256) — *planned* |
+| Tokens | ES256 (ECDSA P-256) via `jose` |
 | Validation | class-validator at the HTTP boundary, zod for environment |
 | Quality | eslint + prettier + strict tsc + a custom architecture gate |
 
@@ -299,15 +299,16 @@ Forbidden because it breaks the above: importing another context's internals (on
 |---|---|
 | ✅ | `identity` — register, get, list, update, soft delete; Argon2id |
 | ✅ | `notification` — durable subscriber proving cross-context reaction |
-| ❌ | `auth` — ES256 keypair, `typ` claim, refresh rotation, Redis blacklist |
-| ❌ | RBAC — roles, permissions, guards |
+| ✅ | `auth` — ES256, `typ` claim, refresh rotation with replay detection, Redis blacklist |
+| ✅ | Global auth guard, deny by default, `@Public()` opt-out |
+| ❌ | RBAC — roles, permissions, `@Roles()` guard |
 
 ### Operations
 
 | | Item |
 |---|---|
 | 🚧 | Health — liveness only; no readiness probe for Postgres/NATS |
-| 🚧 | Redis — provisioned in compose and config, no client or usage yet |
+| ✅ | Redis — access-token blacklist, TTL bounded by the token's own expiry |
 | ❌ | Structured logging, metrics, Sentry (`platform/observability`) |
 | ❌ | Rate limiting |
 | ❌ | Admin / back-office |

@@ -42,8 +42,10 @@ export const envSchema = z.object({
 
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),
-  JWT_ACCESS_TTL: z.string().default('15m'),
-  JWT_REFRESH_TTL: z.string().default('30d'),
+  // Seconds, not a duration string: the tokenizer needs a number, and parsing
+  // "15m" at the edge is one more place to get it wrong.
+  JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(2592000),
 });
 
 export type Env = z.infer<typeof envSchema>;
