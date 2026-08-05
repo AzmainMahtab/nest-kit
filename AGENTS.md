@@ -258,7 +258,33 @@ A context reads another context's events. It does not import its services, repos
 
 Raw SQL in this layer wraps every `UPDATE ... RETURNING` in a CTE ending in a `SELECT`. TypeORM's `query()` returns `[rows, affectedCount]` for update-shaped commands and a plain row array for selects; wrapping keeps the return shape predictable rather than driver-dependent.
 
-**Not built yet:** a durable consumer. In a single process the in-process bus already delivers after commit, so consuming our own stream would be a loop. The consumer arrives with the first extracted service — the messages already carry what it needs to dedup.
+### Durable consumers
+
+A reaction is **either** an in-process `@EventsHandler` **or** a `DurableEventHandler`, never both — registering the same work twice double-applies it.
+
+| | `@EventsHandler` | `DurableEventHandler` |
+|---|---|---|
+| Delivery | in-process, right after commit | JetStream, at-least-once |
+| Survives a crash | no | yes |
+| Use for | immediate work you can afford to lose | anything durable, slow, or cross-context |
+
+```ts
+@Injectable()
+export class WelcomeOnUserRegistered extends DurableEventHandler {
+  readonly consumerName = 'notification_welcome';   // stable; changing it replays from the start
+  readonly subjects = ['identity.user.registered'];
+
+  async handle(event: EventMessage): Promise<void> { ... }
+}
+```
+
+Declare it in the *consuming* context's `infrastructure/event-handlers/`. It is discovered automatically — no central registry, so a context stays self-contained.
+
+- `handle` runs in a transaction that also writes the `messaging.processed_events` marker. Both commit or both roll back, so a handler that fails after the marker is genuinely retried instead of silently skipped.
+- After `DURABLE_MAX_DELIVER` failures the message goes to `messaging.dead_letters` and is terminated — a poison message must not wedge the consumer.
+- Valid JSON is not a valid envelope. Anything unrecognised on the subject is terminated, not retried, and never reaches the dead-letter table.
+- Consumer configuration is reconciled on boot. `consumers.add` throws on an existing durable whose config differs, so create and update are distinguished; a consumer that still cannot start is logged and skipped rather than taking the API down with it.
+- Handlers see `EventMessage` — the wire shape — never a domain class from the producing context, which may be a separate service by then.
 
 ---
 
@@ -339,7 +365,9 @@ const handler = new CreateOrderHandler(new FakeOrderRepository(), new NoopEventB
 - `Test.createTestingModule` is for controllers and module wiring only.
 - Assert on `err.code`, never on message text.
 - One test per behaviour, not per function.
-- `test/` holds e2e specs against a real Postgres and Redis.
+- `test/` holds e2e specs against a real Postgres and NATS (`make db-up`), run with `--runInBand` because they share one database.
+- Environment overrides for e2e go in `test/setup-e2e.ts`, never at the top of a spec. `ConfigModule.forRoot()` loads and validates the environment when `app.module.ts` is first imported, and imports are evaluated before any statement in the importing file — an override written in a spec is read too late and silently does nothing.
+- The JetStream stream is external state that outlives the process. A suite touching it must purge it, the same way it truncates tables.
 
 ---
 

@@ -76,6 +76,15 @@ export class AppConfig {
     };
   }
 
+  get durableConsumer() {
+    return {
+      enabled: this.get('DURABLE_CONSUMER_ENABLED'),
+      maxDeliver: this.get('DURABLE_MAX_DELIVER'),
+      ackWaitMs: this.get('DURABLE_ACK_WAIT_MS'),
+      nakDelayMs: this.get('DURABLE_NAK_DELAY_MS'),
+    };
+  }
+
   get jwt() {
     return {
       privateKeyPath: this.get('JWT_PRIVATE_KEY_PATH'),

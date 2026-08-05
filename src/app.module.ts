@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { IdentityModule } from './modules/identity';
+import { NotificationModule } from './modules/notification';
 import { ConfigModule } from './platform/config';
 import { CryptoModule } from './platform/crypto/crypto.module';
 import { DatabaseModule } from './platform/database';
@@ -19,6 +20,7 @@ import { OutboxModule } from './platform/outbox';
     EventBusModule,
     HealthModule,
     IdentityModule,
+    NotificationModule,
   ],
 })
 export class AppModule {}

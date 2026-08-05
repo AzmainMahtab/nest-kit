@@ -1,0 +1,9 @@
+export { MessagingModule } from './messaging.module';
+export { NatsClient, STREAM_NAME, SUBJECT_PREFIX } from './nats-client';
+export { NatsPublisher } from './nats-publisher';
+export { DurableConsumerService } from './durable-consumer.service';
+export { DurableEventHandler } from './durable-event-handler';
+export type { EventMessage } from './durable-event-handler';
+export { ProcessedEventRepository } from './processed-event.repository';
+export { DeadLetterRepository } from './dead-letter.repository';
+export type { DeadLetterRow } from './dead-letter.repository';

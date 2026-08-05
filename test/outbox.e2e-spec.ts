@@ -9,13 +9,8 @@ import { DataSource } from 'typeorm';
 import { AppModule } from './../src/app.module';
 import { configureApp } from './../src/platform/http/configure-app';
 import { AppConfig } from './../src/platform/config';
-import { STREAM_NAME, SUBJECT_PREFIX } from './../src/platform/messaging/nats-publisher';
+import { STREAM_NAME, SUBJECT_PREFIX } from './../src/platform/messaging';
 import { OutboxRelay, OutboxRepository } from './../src/platform/outbox';
-
-// The relay's background interval would drain rows concurrently with these
-// assertions, so the schedule is off and every drain is driven explicitly via
-// relay.tick(). Set before the module is built, since config is read at init.
-process.env.OUTBOX_ENABLED = 'false';
 
 const PASSWORD = 'correct-horse-battery';
 

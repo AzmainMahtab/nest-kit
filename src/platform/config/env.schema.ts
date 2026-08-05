@@ -32,6 +32,14 @@ export const envSchema = z.object({
   OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().max(1000).default(100),
   OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
 
+  DURABLE_CONSUMER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  DURABLE_MAX_DELIVER: z.coerce.number().int().positive().default(5),
+  DURABLE_ACK_WAIT_MS: z.coerce.number().int().positive().default(30000),
+  DURABLE_NAK_DELAY_MS: z.coerce.number().int().nonnegative().default(2000),
+
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),
   JWT_ACCESS_TTL: z.string().default('15m'),
