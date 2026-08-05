@@ -80,6 +80,85 @@ src/
 
 ---
 
+## Authentication
+
+**Access is denied by default.** The guard is global, so a new route is protected the moment it exists. Public routes opt out explicitly with `@Public()`, which makes every unauthenticated entry point greppable:
+
+| Public route | Why |
+|---|---|
+| `POST /api/users` | registration must precede having a token |
+| `POST /api/auth/login` · `POST /api/auth/refresh` | they *produce* tokens |
+| `GET /health` | probes run without credentials |
+
+```bash
+# 1. register
+curl -X POST localhost:3000/api/users \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"correct-horse-battery"}'
+
+# 2. log in -> { accessToken, refreshToken, expiresAt }
+TOKEN=$(curl -sX POST localhost:3000/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"correct-horse-battery"}' \
+  | jq -r .data.accessToken)
+
+# 3. call anything
+curl localhost:3000/api/users -H "Authorization: Bearer $TOKEN"
+```
+
+`make keygen` must have run first — the tokenizer reads `certs/private.pem` at boot.
+
+**Tokens.** ES256 (ECDSA P-256), never HS256: a shared secret lets every verifier also mint. Access and refresh are signed by the same key and separated only by a `typ` claim, checked on every parse — without it a refresh token would authenticate every request for its whole lifetime. Defaults: access 15 min, refresh 30 days.
+
+**Revocation.** Logout revokes the session (killing refresh) *and* blacklists the access token's `jti` in Redis with a TTL bounded by the token's own `exp`, so an entry can never outlive the token it revokes.
+
+**Refresh rotation with replay detection.** A refresh token is single-use. Presenting a superseded one means it was captured — the legitimate client has already rotated past it — so the whole session is revoked, not just that request, because the attacker may hold a newer token too. The revocation is committed *before* the request is rejected; throwing first would roll it back.
+
+Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }`.
+
+---
+
+## API
+
+| Method | Path | Auth |
+|---|---|---|
+| `POST` | `/api/users` | public |
+| `GET` | `/api/users` | bearer |
+| `GET` | `/api/users/:uuid` | bearer |
+| `PATCH` | `/api/users/:uuid` | bearer |
+| `DELETE` | `/api/users/:uuid` | bearer (soft delete) |
+| `POST` | `/api/auth/login` | public |
+| `POST` | `/api/auth/refresh` | public |
+| `POST` | `/api/auth/logout` | bearer |
+| `GET` | `/health` | public, outside the API prefix |
+
+Full schemas at `/docs` when not in production.
+
+---
+
+## Events
+
+```
+                       ┌── UnitOfWork, after commit ──▶ @EventsHandler
+use case               │                                (in-process, immediate, best effort)
+  └─ publish() ──▶ outbox.events ──▶ OutboxRelay ──▶ evt.<name> ──▶ DurableEventHandler
+     (inside the txn)                 (after commit)   JetStream     (at-least-once, idempotent)
+```
+
+| Event | Emitted when |
+|---|---|
+| `identity.user.registered` | a user is created |
+| `identity.user.email-changed` | the address actually changes |
+| `identity.user.status-changed` | status transitions |
+| `identity.user.deleted` | soft delete |
+| `auth.user.logged-in` | a session starts |
+| `auth.user.logged-out` | logout |
+| `auth.session.revoked` | logout, or replay detection |
+
+Published to `evt.<name>` on the `DOMAIN_EVENTS` stream. `notification_welcome` is the one durable consumer, subscribing to `identity.user.registered`.
+
+---
+
 ## Architectural rules
 
 ### 1. The dependency rule
@@ -237,6 +316,23 @@ Forbidden because it breaks the above: importing another context's internals (on
 
 ---
 
+## Adding a bounded context
+
+`identity` is the reference; clone its shape rather than inventing one.
+
+1. `src/modules/<context>/` with `domain/`, `application/`, `infrastructure/`, `presentation/http/`.
+2. **Domain first** — entity with behaviour, value objects, `errors.ts` as `AppError` factories, `events/`, and `ports/` as `abstract class`. No framework imports.
+3. **Application** — one file per use case, `*.command.ts` plus `*.handler.ts`. Wrap writes in `uow.withTransaction` and publish inside it.
+4. **Infrastructure** — `*.orm-entity.ts`, `*.mapper.ts`, `*-repository.ts` extending `TransactionalRepository`. The ORM entity never leaves this folder.
+5. **Presentation** — controller plus `dto/`. Routes are protected unless marked `@Public()`.
+6. **Migration** — `make migrate-create NAME=X`, its own schema, `BIGSERIAL` + `uuid`, no cross-context foreign keys.
+7. **`index.ts`** exporting only the module, its ports, entities and events — never adapters or handlers.
+8. Register in `app.module.ts`, then `make check`.
+
+To react to another context, add a `DurableEventHandler` in *your* `infrastructure/event-handlers/`. Never import the other context's internals.
+
+---
+
 ## Commands
 
 | Command | Does |
@@ -323,6 +419,28 @@ Forbidden because it breaks the above: importing another context's internals (on
 | ✅ | Shared `configureApp()` so tests cannot drift from production wiring |
 | ❌ | Load / soak testing |
 | ❌ | Coverage thresholds enforced in CI |
+
+---
+
+## Troubleshooting
+
+**`401` on every route.** Expected — access is denied by default. Get a token (see [Authentication](#authentication)) or mark the route `@Public()`.
+
+**Boot fails reading `certs/private.pem`.** Run `make keygen`. The keypair is gitignored, so every clone and every CI run needs its own.
+
+**e2e fails with "relation does not exist".** e2e needs real infrastructure: `make db-up` then `make migrate-up`.
+
+**e2e passes alone but fails in the suite.** They share one database, so they run `--runInBand`. A suite touching the JetStream stream must also purge it — the stream outlives the process, and `DeliverPolicy.All` replays history the moment `processed_events` is truncated.
+
+**An env override in a spec does nothing.** `ConfigModule.forRoot()` reads and validates the environment when `app.module.ts` is first imported, and imports evaluate before any statement in the importing file. Put overrides in `test/setup-e2e.ts`.
+
+**`SyntaxError: Unexpected token 'export'` from jose.** It is ESM-only and jest's runtime is CJS. Both jest configs carry `transformIgnorePatterns: ["node_modules/(?!.*jose)"]`; the naive `(?!jose)` fails because pnpm nests packages under `.pnpm/`.
+
+**Events never reach a consumer.** Check `outbox.events`: `published_at IS NULL` means the relay is not draining (is NATS up? is `OUTBOX_ENABLED` true?); a set `dead_lettered_at` means publishing failed `OUTBOX_MAX_ATTEMPTS` times — see `last_error`. If rows are published but nothing reacts, look in `messaging.dead_letters`.
+
+**"consumer already exists" at boot.** A durable consumer's configuration changed. It is reconciled automatically; if it still fails the consumer is skipped and logged rather than taking the API down.
+
+**Host `pnpm build` fails with `EACCES`.** A stale root-owned `dist/` from an older container. Every stage now runs as `node` (uid 1000); remove `dist/` and rebuild.
 
 ---
 
