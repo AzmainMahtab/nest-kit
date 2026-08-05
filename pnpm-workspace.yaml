@@ -1,2 +1,6 @@
 allowBuilds:
+  # Telemetry collector pulled in transitively. Denied deliberately — an
+  # unanswered entry makes `pnpm install --frozen-lockfile` exit non-zero and
+  # breaks the Docker build.
+  '@scarf/scarf': false
   unrs-resolver: true
