@@ -4,8 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 
 import { AppModule } from './../src/app.module';
-import { AppErrorFilter } from './../src/platform/http/filters/app-error.filter';
-import { ResponseEnvelopeInterceptor } from './../src/platform/http/interceptors/response-envelope.interceptor';
+import { configureApp } from './../src/platform/http/configure-app';
 
 describe('Application (e2e)', () => {
   let app: INestApplication<App>;
@@ -16,9 +15,7 @@ describe('Application (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api', { exclude: ['health'] });
-    app.useGlobalInterceptors(new ResponseEnvelopeInterceptor());
-    app.useGlobalFilters(new AppErrorFilter());
+    configureApp(app);
     await app.init();
   });
 

@@ -5,9 +5,7 @@ import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 
 import { AppModule } from './../src/app.module';
-import { AppErrorFilter } from './../src/platform/http/filters/app-error.filter';
-import { ResponseEnvelopeInterceptor } from './../src/platform/http/interceptors/response-envelope.interceptor';
-import { createValidationPipe } from './../src/platform/http/pipes/validation';
+import { configureApp } from './../src/platform/http/configure-app';
 
 const PASSWORD = 'correct-horse-battery';
 
@@ -49,10 +47,7 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api', { exclude: ['health'] });
-    app.useGlobalPipes(createValidationPipe());
-    app.useGlobalInterceptors(new ResponseEnvelopeInterceptor());
-    app.useGlobalFilters(new AppErrorFilter());
+    configureApp(app);
     await app.init();
 
     dataSource = app.get(DataSource);
