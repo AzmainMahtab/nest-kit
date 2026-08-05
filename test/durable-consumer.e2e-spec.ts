@@ -5,7 +5,6 @@ import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 
 import { AppModule } from './../src/app.module';
-import { NotificationRepository } from './../src/modules/notification';
 import { AppConfig } from './../src/platform/config';
 import { configureApp } from './../src/platform/http/configure-app';
 import {
@@ -139,45 +138,105 @@ describe('Durable consumer (e2e — requires Postgres, NATS and `make migrate-up
     expect(rows.map((r) => r.body).join(' ')).toContain('grace@example.com');
   });
 
-  it('dead-letters a message the handler cannot process, without blocking the stream', async () => {
-    const handler = consumers.handlers().find((h) => h.consumerName === 'notification_welcome')!;
-    const repository = app.get(NotificationRepository);
-    const maxDeliver = app.get(AppConfig).durableConsumer.maxDeliver;
+  /**
+   * The escalation is driven directly rather than by waiting for the broker to
+   * redeliver a real message N times. Orchestrating redelivery timing from a
+   * test is slow and inherently racy; what matters is the decision the consumer
+   * makes on each delivery, and the at-least-once delivery path itself is
+   * already covered by the redelivery test above.
+   */
+  const messageStub = (deliveryCount: number, body?: string) => {
+    const acks: string[] = [];
+    const payload =
+      body ??
+      JSON.stringify({
+        name: 'identity.user.registered',
+        version: '1',
+        idempotencyKey: '00000000-0000-0000-0000-0000000000aa',
+        occurredAt: new Date().toISOString(),
+        payload: { userUuid: 'u-1', email: 'ada@example.com' },
+      });
 
+    return {
+      acks,
+      msg: {
+        data: new TextEncoder().encode(payload),
+        subject: 'evt.identity.user.registered',
+        info: { deliveryCount },
+        ack: () => acks.push('ack'),
+        nak: () => acks.push('nak'),
+        term: () => acks.push('term'),
+      },
+    };
+  };
+
+  const welcomeHandler = () =>
+    consumers.handlers().find((h) => h.consumerName === 'notification_welcome')!;
+
+  it('retries a failing handler while attempts remain', async () => {
+    const handler = welcomeHandler();
     const failure = jest
-      .spyOn(repository, 'save')
+      .spyOn(handler, 'handle')
       .mockRejectedValue(new Error('notification store unavailable'));
 
     try {
-      await register('ada@example.com').expect(201);
-      await relay.tick();
+      const { msg, acks } = messageStub(1);
+      await consumers.dispatch(handler, msg as never);
 
-      const dead = await waitFor(
-        () => deadLetters.count(),
-        (n) => n > 0,
-        (maxDeliver + 2) * 2500,
-      );
+      expect(acks).toEqual(['nak']);
+      expect(await deadLetters.count()).toBe(0);
 
-      expect(dead).toBe(1);
+      // The claim rolled back with the handler, so a redelivery is genuinely
+      // retried rather than skipped as already processed.
+      const marks = await dataSource.query<unknown[]>('SELECT * FROM messaging.processed_events');
+      expect(marks).toHaveLength(0);
+    } finally {
+      failure.mockRestore();
+    }
+  });
+
+  it('dead-letters on the final delivery instead of retrying forever', async () => {
+    const handler = welcomeHandler();
+    const maxDeliver = app.get(AppConfig).durableConsumer.maxDeliver;
+    const failure = jest
+      .spyOn(handler, 'handle')
+      .mockRejectedValue(new Error('notification store unavailable'));
+
+    try {
+      const { msg, acks } = messageStub(maxDeliver);
+      await consumers.dispatch(handler, msg as never);
+
+      // Terminated, not naked: a poison message must not be redelivered forever
+      // and must not block the messages behind it.
+      expect(acks).toEqual(['term']);
+
       const [row] = await deadLetters.list();
       expect(row?.consumer_name).toBe('notification_welcome');
       expect(row?.error).toContain('notification store unavailable');
-      expect(row?.delivery_count).toBeGreaterThanOrEqual(maxDeliver);
+      expect(row?.delivery_count).toBe(maxDeliver);
       expect(await notifications()).toHaveLength(0);
     } finally {
       failure.mockRestore();
-      await deadLetters.discard(
-        handler.consumerName,
-        (await deadLetters.list())[0]?.idempotency_key ?? '00000000-0000-0000-0000-000000000000',
-      );
     }
+  });
 
-    // The consumer is still alive: a fresh event is handled normally.
+  it('terminates a message whose envelope it cannot recognise', async () => {
+    const { msg, acks } = messageStub(1, '{"not":"an event"}');
+
+    await consumers.dispatch(welcomeHandler(), msg as never);
+
+    expect(acks).toEqual(['term']);
+    // Never recorded: the dead-letter columns assume a well-formed event.
+    expect(await deadLetters.count()).toBe(0);
+  });
+
+  it('stays alive after a dead letter and handles the next event', async () => {
     await register('grace@example.com').expect(201);
     await relay.tick();
 
     const rows = await waitFor(notifications, (r) => r.length > 0);
+
     expect(rows).toHaveLength(1);
     expect(rows[0]?.body).toContain('grace@example.com');
-  }, 30000);
+  });
 });
