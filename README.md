@@ -135,6 +135,10 @@ Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }
 | `POST` | `/api/admin/messaging/outbox/replay` | bearer ⚠️ |
 | `GET` | `/api/admin/messaging/dead-letters` | bearer ⚠️ |
 | `POST` | `/api/admin/messaging/dead-letters/discard` | bearer ⚠️ |
+| `POST` `GET` | `/api/owners`, `/api/owners/:uuid` | bearer |
+| `PATCH` | `/api/owners/:uuid/address`, `/api/owners/:uuid/deactivate` | bearer |
+| `POST` `GET` | `/api/cars`, `/api/cars/:uuid` | bearer |
+| `PATCH` | `/api/cars/:uuid/transfer`, `/price`, `/retire` | bearer |
 | `GET` | `/health` | public, outside the API prefix |
 
 ⚠️ The admin routes are authenticated but **not yet authorised** — any logged-in
@@ -163,8 +167,18 @@ use case               │                                (in-process, immediate
 | `auth.user.logged-in` | a session starts |
 | `auth.user.logged-out` | logout |
 | `auth.session.revoked` | logout, or replay detection |
+| `owner.owner.registered` · `.address-changed` · `.deactivated` · `.reactivated` | owner lifecycle |
+| `car.car.registered` · `.transferred` · `.repriced` · `.retired` | car lifecycle |
 
-Published to `evt.<name>` on the `DOMAIN_EVENTS` stream. `notification_welcome` is the one durable consumer, subscribing to `identity.user.registered`.
+Published to `evt.<name>` on the `DOMAIN_EVENTS` stream. Durable consumers:
+
+| Consumer | Subscribes to | Does |
+|---|---|---|
+| `notification_welcome` | `identity.user.registered` | queues a welcome notification |
+| `owner_deactivate_on_user_deleted` | `identity.user.deleted` | deactivates the matching owner |
+| `car_retire_on_owner_deactivated` | `owner.owner.deactivated` | retires that owner's cars |
+
+The last two form a **two-hop choreography** — deleting a user deactivates their owner record, which retires their cars — with no context importing another's internals and no foreign keys between schemas.
 
 ---
 
@@ -327,7 +341,22 @@ Forbidden because it breaks the above: importing another context's internals (on
 
 ## Adding a bounded context
 
-`identity` is the reference; clone its shape rather than inventing one.
+`identity` is the minimal reference. **`owner` and `car` are the worked pair**, and between them exercise every rule in this README:
+
+| Principle | Where to look |
+|---|---|
+| Value object enforcing a domain rule | `owner/domain/value-objects/date-of-birth.ts` — minimum age |
+| Value object normalising input | `car/domain/value-objects/license-plate.ts` — `ab-12 cd` and `AB12CD` are one plate |
+| Money as a decimal string | `car/domain/value-objects/money.ts` and `NUMERIC(12,2)` — never a float |
+| Aggregate invariants | `car.transferTo` rejects a no-op transfer; a retired car refuses every change |
+| Idempotent state change | `owner.deactivate` / `car.retire` emit once, because the caller may be a redelivered event |
+| Cross-context read via a port | `RegisterOwnerHandler` takes identity's `UserRepository`; `RegisterCarHandler` takes owner's `OwnerRepository` |
+| Referential integrity without a foreign key | checked in the use case, since a cross-schema FK would block extraction |
+| Cross-context reaction | the two durable handlers above |
+| Batch write in one transaction | `CarRepository.saveAll` when an owner's cars are retired together |
+| Partial index for the hot query | `cars_active_owner_idx` covers exactly the deactivation reaction |
+
+Clone that shape rather than inventing one.
 
 1. `src/modules/<context>/` with `domain/`, `application/`, `infrastructure/`, `presentation/http/`.
 2. **Domain first** — entity with behaviour, value objects, `errors.ts` as `AppError` factories, `events/`, and `ports/` as `abstract class`. No framework imports.
@@ -405,6 +434,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 |---|---|
 | ✅ | `identity` — register, get, list, update, soft delete; Argon2id |
 | ✅ | `notification` — durable subscriber proving cross-context reaction |
+| ✅ | `owner` + `car` — the worked reference pair (see below) |
 | ✅ | `auth` — ES256, `typ` claim, refresh rotation with replay detection, Redis blacklist |
 | ✅ | Global auth guard, deny by default, `@Public()` opt-out |
 | ❌ | RBAC — roles, permissions, `@Roles()` guard |
