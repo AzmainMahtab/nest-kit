@@ -13,6 +13,7 @@ import {
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { Public } from '../../../../platform/http/decorators/public.decorator';
 import { Page, PaginationParams } from '../../../../shared/pagination';
 import { DeleteUserCommand } from '../../application/commands/delete-user.command';
 import { RegisterUserCommand } from '../../application/commands/register-user.command';
@@ -33,6 +34,7 @@ export class UsersController {
     private readonly queries: QueryBus,
   ) {}
 
+  @Public()
   @Post()
   @ApiOperation({ summary: 'Register a user' })
   @ApiResponse({ status: 201, type: UserResponseDto })

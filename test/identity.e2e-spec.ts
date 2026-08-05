@@ -34,12 +34,21 @@ interface ErrorBody {
 const ok = <T>(res: { body: unknown }): T => (res.body as { data: T }).data;
 const fail = (res: { body: unknown }): ErrorBody => res.body as ErrorBody;
 
-describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
+describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', () => {
   let app: INestApplication<App>;
   let dataSource: DataSource;
 
-  const register = (email: string) =>
-    request(app.getHttpServer()).post('/api/users').send({ email, password: PASSWORD });
+  const http = () => request(app.getHttpServer());
+  const register = (email: string) => http().post('/api/users').send({ email, password: PASSWORD });
+
+  /** Registration is public; every other route needs a bearer token. */
+  const tokenFor = async (email: string): Promise<string> => {
+    const res = await http()
+      .post('/api/auth/login')
+      .send({ email, password: PASSWORD })
+      .expect(200);
+    return `Bearer ${ok<{ accessToken: string }>(res).accessToken}`;
+  };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -55,6 +64,7 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
 
   beforeEach(async () => {
     await dataSource.query('TRUNCATE identity.users RESTART IDENTITY');
+    await dataSource.query('TRUNCATE auth.sessions RESTART IDENTITY');
   });
 
   afterAll(async () => {
@@ -81,7 +91,7 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
   });
 
   it('reports validation failures through the same envelope', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await http()
       .post('/api/users')
       .send({ email: 'nope', password: 'short' })
       .expect(400);
@@ -92,7 +102,7 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
   });
 
   it('refuses an unknown property rather than silently accepting it', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await http()
       .post('/api/users')
       .send({ email: 'ada@example.com', password: PASSWORD, status: 'ACTIVE' })
       .expect(400);
@@ -102,15 +112,17 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
 
   it('fetches, updates and lists users', async () => {
     const created = ok<UserBody>(await register('ada@example.com').expect(201));
+    const auth = await tokenFor('ada@example.com');
 
     const fetched = ok<UserBody>(
-      await request(app.getHttpServer()).get(`/api/users/${created.uuid}`).expect(200),
+      await http().get(`/api/users/${created.uuid}`).set('Authorization', auth).expect(200),
     );
     expect(fetched.email).toBe('ada@example.com');
 
     const updated = ok<UserBody>(
-      await request(app.getHttpServer())
+      await http()
         .patch(`/api/users/${created.uuid}`)
+        .set('Authorization', auth)
         .send({ status: 'ACTIVE', email: 'grace@example.com' })
         .expect(200),
     );
@@ -120,7 +132,7 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
     await register('ada@example.com').expect(201);
 
     const page = ok<PageBody>(
-      await request(app.getHttpServer()).get('/api/users?limit=1').expect(200),
+      await http().get('/api/users?limit=1').set('Authorization', auth).expect(200),
     );
     expect(page).toMatchObject({ total: 2, limit: 1, totalPages: 2 });
     expect(page.items).toHaveLength(1);
@@ -128,11 +140,15 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
 
   it('hides a soft-deleted user and frees its address for reuse', async () => {
     const created = ok<UserBody>(await register('ada@example.com').expect(201));
+    // A second account, so the caller's token outlives the deletion under test.
+    await register('actor@example.com').expect(201);
+    const auth = await tokenFor('actor@example.com');
 
-    await request(app.getHttpServer()).delete(`/api/users/${created.uuid}`).expect(204);
+    await http().delete(`/api/users/${created.uuid}`).set('Authorization', auth).expect(204);
 
-    const missing = await request(app.getHttpServer())
+    const missing = await http()
       .get(`/api/users/${created.uuid}`)
+      .set('Authorization', auth)
       .expect(404);
     expect(fail(missing).error.code).toBe('USER_NOT_FOUND');
 
@@ -147,6 +163,9 @@ describe('Identity (e2e — requires Postgres + `make migrate-up`)', () => {
   });
 
   it('rejects a non-uuid path parameter before reaching the handler', async () => {
-    await request(app.getHttpServer()).get('/api/users/not-a-uuid').expect(400);
+    await register('ada@example.com').expect(201);
+    const auth = await tokenFor('ada@example.com');
+
+    await http().get('/api/users/not-a-uuid').set('Authorization', auth).expect(400);
   });
 });

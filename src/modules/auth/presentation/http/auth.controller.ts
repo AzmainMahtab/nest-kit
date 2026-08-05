@@ -1,0 +1,62 @@
+import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { CommandBus } from '@nestjs/cqrs';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+
+import { CurrentUser } from '../../../../platform/http/decorators/current-user.decorator';
+import { Public } from '../../../../platform/http/decorators/public.decorator';
+import type { CurrentUser as CurrentUserType } from '../../../../shared/auth-context';
+import { LoginCommand, TokenPair } from '../../application/commands/login.command';
+import { LogoutCommand } from '../../application/commands/logout.command';
+import { RefreshTokenCommand } from '../../application/commands/refresh-token.command';
+import { LoginDto, RefreshDto, TokenPairDto } from './dto/auth.dto';
+
+@ApiTags('Auth')
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly commands: CommandBus) {}
+
+  @Public()
+  @Post('login')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Exchange credentials for a token pair' })
+  @ApiResponse({ status: 200, type: TokenPairDto })
+  @ApiResponse({ status: 401, description: 'INVALID_CREDENTIALS' })
+  async login(@Body() dto: LoginDto): Promise<TokenPairDto> {
+    const pair = await this.commands.execute<LoginCommand, TokenPair>(
+      new LoginCommand(dto.email, dto.password),
+    );
+    return toDto(pair);
+  }
+
+  @Public()
+  @Post('refresh')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Rotate a refresh token for a new pair' })
+  @ApiResponse({ status: 200, type: TokenPairDto })
+  @ApiResponse({ status: 401, description: 'REFRESH_TOKEN_REPLAYED / SESSION_NOT_ACTIVE' })
+  async refresh(@Body() dto: RefreshDto): Promise<TokenPairDto> {
+    const pair = await this.commands.execute<RefreshTokenCommand, TokenPair>(
+      new RefreshTokenCommand(dto.refreshToken),
+    );
+    return toDto(pair);
+  }
+
+  @Post('logout')
+  @HttpCode(204)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke the current session and access token' })
+  @ApiResponse({ status: 204, description: 'Logged out' })
+  async logout(@CurrentUser() user: CurrentUserType): Promise<void> {
+    // The token's own `exp` bounds the blacklist entry, so an entry can never
+    // outlive the token it revokes.
+    await this.commands.execute(new LogoutCommand(user.sessionUuid, user.jti, user.expiresAt));
+  }
+}
+
+function toDto(pair: TokenPair): TokenPairDto {
+  return {
+    accessToken: pair.accessToken,
+    refreshToken: pair.refreshToken,
+    expiresAt: pair.expiresAt.toISOString(),
+  };
+}

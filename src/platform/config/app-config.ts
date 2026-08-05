@@ -89,8 +89,8 @@ export class AppConfig {
     return {
       privateKeyPath: this.get('JWT_PRIVATE_KEY_PATH'),
       publicKeyPath: this.get('JWT_PUBLIC_KEY_PATH'),
-      accessTtl: this.get('JWT_ACCESS_TTL'),
-      refreshTtl: this.get('JWT_REFRESH_TTL'),
+      accessTtlSeconds: this.get('JWT_ACCESS_TTL_SECONDS'),
+      refreshTtlSeconds: this.get('JWT_REFRESH_TTL_SECONDS'),
     };
   }
 }

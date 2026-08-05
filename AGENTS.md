@@ -213,7 +213,7 @@ Every refresh issues a new refresh token and stores its `jti` on the session. A 
 
 ### Authorization
 
-`src/shared/auth-context/` holds `CurrentUser` and the `@CurrentUser()` decorator. Any context may import it. **Never** import `modules/auth/presentation/` from another context — that creates a module cycle and breaks extraction.
+`src/shared/auth-context/` holds the `CurrentUser` **type** only — `shared/` is framework-free, so the `@CurrentUser()` decorator lives in `platform/http/decorators/`. Any context may import the type. **Never** import `modules/auth/presentation/` from another context — that creates a module cycle and breaks extraction.
 
 Public endpoints never bind privilege-bearing fields (`role`, `status`, `ownerId`) from the request body. `ValidationPipe` runs with `whitelist: true, forbidNonWhitelisted: true` globally; that is a backstop, not the rule.
 
@@ -368,6 +368,7 @@ const handler = new CreateOrderHandler(new FakeOrderRepository(), new NoopEventB
 - `test/` holds e2e specs against a real Postgres and NATS (`make db-up`), run with `--runInBand` because they share one database.
 - Environment overrides for e2e go in `test/setup-e2e.ts`, never at the top of a spec. `ConfigModule.forRoot()` loads and validates the environment when `app.module.ts` is first imported, and imports are evaluated before any statement in the importing file — an override written in a spec is read too late and silently does nothing.
 - The JetStream stream is external state that outlives the process. A suite touching it must purge it, the same way it truncates tables.
+- `jose` is ESM-only and jest's runtime is CJS, so both jest configs carry `transformIgnorePatterns: ["node_modules/(?!.*jose)"]`. The default pattern skips everything under `node_modules`, and pnpm's `.pnpm/` layout defeats a naive `(?!jose)`.
 
 ---
 
@@ -400,6 +401,6 @@ What would break this, and is therefore forbidden:
 
 - Importing another context's `domain/`, `application/`, `infrastructure/`, or `presentation/` — only its `index.ts` and its published events.
 - A shared `ports/` module.
-- Injecting another context's service into a use case.
+- Injecting another context's **concrete service or adapter**. Depending on another context's *port*, taken from its public index, is permitted and is how `auth` reads `identity` — at extraction time that port becomes a remote client and the use case is unchanged.
 - Cross-context foreign keys or joins added without a plan to denormalize.
 - Throwing `@nestjs/common` HTTP exceptions from `application/` or `domain/`.
