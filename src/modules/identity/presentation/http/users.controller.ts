@@ -11,9 +11,15 @@ import {
   Query,
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { Public } from '../../../../platform/http/decorators/public.decorator';
+import {
+  ApiAuthFailures,
+  ApiEnvelope,
+  ApiFailure,
+  ApiValidationFailure,
+} from '../../../../platform/http/swagger';
 import { Page, PaginationParams } from '../../../../shared/pagination';
 import { DeleteUserCommand } from '../../application/commands/delete-user.command';
 import { RegisterUserCommand } from '../../application/commands/register-user.command';
@@ -37,8 +43,9 @@ export class UsersController {
   @Public()
   @Post()
   @ApiOperation({ summary: 'Register a user' })
-  @ApiResponse({ status: 201, type: UserResponseDto })
-  @ApiResponse({ status: 409, description: 'EMAIL_ALREADY_REGISTERED' })
+  @ApiEnvelope(UserResponseDto, { status: 201, description: 'Registered' })
+  @ApiValidationFailure()
+  @ApiFailure(409, 'EMAIL_ALREADY_REGISTERED')
   async register(@Body() dto: RegisterUserDto): Promise<UserResponseDto> {
     const user = await this.commands.execute<RegisterUserCommand, User>(
       new RegisterUserCommand(dto.email, dto.password),
@@ -47,8 +54,10 @@ export class UsersController {
   }
 
   @Get()
+  @ApiBearerAuth()
+  @ApiAuthFailures()
   @ApiOperation({ summary: 'List users' })
-  @ApiResponse({ status: 200, type: UserPageDto })
+  @ApiEnvelope(UserPageDto, { status: 200, description: 'A page of users' })
   async list(@Query() dto: ListUsersDto): Promise<UserPageDto> {
     const page = await this.queries.execute<ListUsersQuery, Page<User>>(
       new ListUsersQuery(new PaginationParams(dto.page, dto.limit)),
@@ -57,17 +66,23 @@ export class UsersController {
   }
 
   @Get(':uuid')
+  @ApiBearerAuth()
+  @ApiAuthFailures()
   @ApiOperation({ summary: 'Get a user' })
-  @ApiResponse({ status: 200, type: UserResponseDto })
-  @ApiResponse({ status: 404, description: 'USER_NOT_FOUND' })
+  @ApiEnvelope(UserResponseDto, { status: 200 })
+  @ApiFailure(404, 'USER_NOT_FOUND')
   async get(@Param('uuid', ParseUUIDPipe) uuid: string): Promise<UserResponseDto> {
     const user = await this.queries.execute<GetUserQuery, User>(new GetUserQuery(uuid));
     return UserResponseDto.from(user);
   }
 
   @Patch(':uuid')
+  @ApiBearerAuth()
+  @ApiAuthFailures()
   @ApiOperation({ summary: 'Update a user' })
-  @ApiResponse({ status: 200, type: UserResponseDto })
+  @ApiEnvelope(UserResponseDto, { status: 200 })
+  @ApiValidationFailure()
+  @ApiFailure(404, 'USER_NOT_FOUND')
   async update(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: UpdateUserDto,
@@ -80,8 +95,11 @@ export class UsersController {
 
   @Delete(':uuid')
   @HttpCode(204)
+  @ApiBearerAuth()
+  @ApiAuthFailures()
   @ApiOperation({ summary: 'Soft-delete a user' })
-  @ApiResponse({ status: 204, description: 'Deleted' })
+  @ApiResponse({ status: 204, description: 'Deleted; no body' })
+  @ApiFailure(404, 'USER_NOT_FOUND')
   async remove(@Param('uuid', ParseUUIDPipe) uuid: string): Promise<void> {
     await this.commands.execute(new DeleteUserCommand(uuid));
   }

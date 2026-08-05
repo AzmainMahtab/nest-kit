@@ -17,6 +17,16 @@ export const envSchema = z.object({
   REDIS_PORT: z.coerce.number().int().positive().default(6379),
   REDIS_URL: z.string().optional(),
 
+  // Surfaced in the OpenAPI document. Set from the image tag when deploying.
+  APP_VERSION: z.string().default('0.0.1'),
+
+  // Defaults to on outside production; set explicitly to expose or hide it.
+  SWAGGER_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
+  SWAGGER_PATH: z.string().default('docs'),
+
   NATS_URL: z.string().default('nats://localhost:4222'),
   NATS_MAX_AGE_MS: z.coerce
     .number()

@@ -1,7 +1,13 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import {
+  ApiAuthFailures,
+  ApiEnvelope,
+  ApiFailure,
+  ApiValidationFailure,
+} from '../../../../platform/http/swagger';
 import { Page, PaginationParams } from '../../../../shared/pagination';
 import { RegisterOwnerCommand } from '../../application/commands/register-owner.command';
 import {
@@ -21,6 +27,7 @@ import {
 
 @ApiTags('Owners')
 @ApiBearerAuth()
+@ApiAuthFailures()
 @Controller('owners')
 export class OwnersController {
   constructor(
@@ -30,8 +37,10 @@ export class OwnersController {
 
   @Post()
   @ApiOperation({ summary: 'Register a user as a car owner' })
-  @ApiResponse({ status: 201, type: OwnerResponseDto })
-  @ApiResponse({ status: 409, description: 'OWNER_ALREADY_REGISTERED' })
+  @ApiEnvelope(OwnerResponseDto, { status: 201, description: 'Registered' })
+  @ApiValidationFailure()
+  @ApiFailure(400, 'USER_NOT_FOUND', 'No such user; checked in the use case, not by a foreign key')
+  @ApiFailure(409, 'OWNER_ALREADY_REGISTERED')
   async register(@Body() dto: RegisterOwnerDto): Promise<OwnerResponseDto> {
     const owner = await this.commands.execute<RegisterOwnerCommand, Owner>(
       new RegisterOwnerCommand(dto.userUuid, dto.address, dto.dateOfBirth),
@@ -41,7 +50,7 @@ export class OwnersController {
 
   @Get()
   @ApiOperation({ summary: 'List owners' })
-  @ApiResponse({ status: 200, type: OwnerPageDto })
+  @ApiEnvelope(OwnerPageDto, { status: 200, description: 'A page of owners' })
   async list(@Query() dto: ListOwnersDto): Promise<OwnerPageDto> {
     const page = await this.queries.execute<ListOwnersQuery, Page<Owner>>(
       new ListOwnersQuery(new PaginationParams(dto.page, dto.limit)),
@@ -51,8 +60,8 @@ export class OwnersController {
 
   @Get(':uuid')
   @ApiOperation({ summary: 'Get an owner' })
-  @ApiResponse({ status: 200, type: OwnerResponseDto })
-  @ApiResponse({ status: 404, description: 'OWNER_NOT_FOUND' })
+  @ApiEnvelope(OwnerResponseDto, { status: 200 })
+  @ApiFailure(404, 'OWNER_NOT_FOUND')
   async get(@Param('uuid', ParseUUIDPipe) uuid: string): Promise<OwnerResponseDto> {
     const owner = await this.queries.execute<GetOwnerQuery, Owner>(new GetOwnerQuery(uuid));
     return OwnerResponseDto.from(owner);
@@ -60,8 +69,9 @@ export class OwnersController {
 
   @Patch(':uuid/address')
   @ApiOperation({ summary: 'Change an owner address' })
-  @ApiResponse({ status: 200, type: OwnerResponseDto })
-  @ApiResponse({ status: 409, description: 'OWNER_INACTIVE' })
+  @ApiEnvelope(OwnerResponseDto, { status: 200 })
+  @ApiValidationFailure()
+  @ApiFailure(409, 'OWNER_INACTIVE', 'An inactive owner cannot be edited')
   async changeAddress(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: UpdateOwnerAddressDto,
@@ -74,7 +84,11 @@ export class OwnersController {
 
   @Patch(':uuid/deactivate')
   @ApiOperation({ summary: 'Deactivate an owner; the car context retires their cars' })
-  @ApiResponse({ status: 200, type: OwnerResponseDto })
+  @ApiEnvelope(OwnerResponseDto, {
+    status: 200,
+    description: 'Idempotent: already inactive is a success',
+  })
+  @ApiFailure(404, 'OWNER_NOT_FOUND')
   async deactivate(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: DeactivateOwnerDto,

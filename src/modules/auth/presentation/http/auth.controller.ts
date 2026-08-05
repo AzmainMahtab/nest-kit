@@ -3,6 +3,7 @@ import { CommandBus } from '@nestjs/cqrs';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../../../platform/http/decorators/current-user.decorator';
+import { ApiEnvelope, ApiFailure, ApiValidationFailure } from '../../../../platform/http/swagger';
 import { Public } from '../../../../platform/http/decorators/public.decorator';
 import type { CurrentUser as CurrentUserType } from '../../../../shared/auth-context';
 import { LoginCommand, TokenPair } from '../../application/commands/login.command';
@@ -19,8 +20,14 @@ export class AuthController {
   @Post('login')
   @HttpCode(200)
   @ApiOperation({ summary: 'Exchange credentials for a token pair' })
-  @ApiResponse({ status: 200, type: TokenPairDto })
-  @ApiResponse({ status: 401, description: 'INVALID_CREDENTIALS' })
+  @ApiEnvelope(TokenPairDto, { status: 200, description: 'A fresh token pair' })
+  @ApiValidationFailure()
+  @ApiFailure(
+    401,
+    'INVALID_CREDENTIALS',
+    'Deliberately identical for an unknown address and a wrong password',
+  )
+  @ApiFailure(403, 'ACCOUNT_SUSPENDED')
   async login(@Body() dto: LoginDto): Promise<TokenPairDto> {
     const pair = await this.commands.execute<LoginCommand, TokenPair>(
       new LoginCommand(dto.email, dto.password),
@@ -32,8 +39,12 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(200)
   @ApiOperation({ summary: 'Rotate a refresh token for a new pair' })
-  @ApiResponse({ status: 200, type: TokenPairDto })
-  @ApiResponse({ status: 401, description: 'REFRESH_TOKEN_REPLAYED / SESSION_NOT_ACTIVE' })
+  @ApiEnvelope(TokenPairDto, { status: 200, description: 'A rotated token pair' })
+  @ApiFailure(
+    401,
+    'REFRESH_TOKEN_REPLAYED',
+    'A superseded token was presented; the whole session is revoked',
+  )
   async refresh(@Body() dto: RefreshDto): Promise<TokenPairDto> {
     const pair = await this.commands.execute<RefreshTokenCommand, TokenPair>(
       new RefreshTokenCommand(dto.refreshToken),
@@ -45,7 +56,8 @@ export class AuthController {
   @HttpCode(204)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Revoke the current session and access token' })
-  @ApiResponse({ status: 204, description: 'Logged out' })
+  @ApiResponse({ status: 204, description: 'Logged out; no body' })
+  @ApiFailure(401, 'MISSING_TOKEN')
   async logout(@CurrentUser() user: CurrentUserType): Promise<void> {
     // The token's own `exp` bounds the blacklist entry, so an entry can never
     // outlive the token it revokes.
