@@ -1,4 +1,5 @@
-.PHONY: help dev dev-down prod prod-down down build logs ps sh db-up db-down psql redis-cli clean check keygen
+.PHONY: help dev dev-down prod prod-down down build logs ps sh db-up db-down psql redis-cli clean check keygen \
+        migrate-create migrate-up migrate-down migrate-status
 
 -include .env
 export
@@ -38,6 +39,19 @@ down: ## Stop everything and remove volumes
 
 check: ## Run every gate: lint, typecheck, architecture, tests
 	pnpm run check
+
+migrate-create: ## Create an empty migration: make migrate-create NAME=CreateUsersTable
+	@test -n "$(NAME)" || (echo "NAME is required, e.g. make migrate-create NAME=CreateUsersTable"; exit 1)
+	pnpm run migration:create src/database/migrations/$(NAME)
+
+migrate-up: ## Apply pending migrations
+	pnpm run migration:run
+
+migrate-down: ## Revert the last migration
+	pnpm run migration:revert
+
+migrate-status: ## Show applied and pending migrations
+	pnpm run migration:show
 
 keygen: ## Generate the ES256 keypair into certs/
 	@mkdir -p certs
