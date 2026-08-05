@@ -328,4 +328,6 @@ Forbidden because it breaks the above: importing another context's internals (on
 
 ## License
 
-UNLICENSED — private starter kit.
+[MIT](LICENSE) © 2026 Azmain Mahtab.
+
+`package.json` keeps `"private": true` so the kit cannot be published to npm by accident. It is a template to clone, not a package to install — that flag is about distribution, not licensing.

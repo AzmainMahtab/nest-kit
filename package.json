@@ -1,10 +1,10 @@
 {
   "name": "nest-kit",
   "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "description": "NestJS modular monolith starter: Clean Architecture, DDD, CQRS, transactional outbox over NATS JetStream",
+  "author": "Azmain Mahtab",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
