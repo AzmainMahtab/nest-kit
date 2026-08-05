@@ -14,9 +14,16 @@ RUN npm install -g pnpm@${PNPM_VERSION}
 ENV PNPM_HOME=/pnpm
 WORKDIR /app
 
+# Every stage runs as the unprivileged node user (uid 1000). The dev overlay
+# bind-mounts the host source over /app, so a root-running container writes
+# root-owned dist/ back onto the host and breaks host-side `pnpm build`.
+# uid 1000 matches the default host user, so the mount stays writable both ways.
+RUN mkdir -p /pnpm && chown -R node:node /pnpm /app
+USER node
+
 # pnpm-workspace.yaml carries the allowBuilds approvals. Without it pnpm 11
 # exits non-zero on unapproved dependency build scripts and the build fails.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 # ============================================================
 # DEPENDENCIES
@@ -32,8 +39,8 @@ RUN pnpm install --frozen-lockfile --prod
 # ============================================================
 FROM deps AS builder
 
-COPY tsconfig.json tsconfig.build.json nest-cli.json ./
-COPY src ./src
+COPY --chown=node:node tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY --chown=node:node src ./src
 RUN pnpm run build
 
 # ============================================================
@@ -63,7 +70,7 @@ FROM deps AS development
 ENV NODE_ENV=development
 ENV PORT=3000
 
-COPY . .
+COPY --chown=node:node . .
 
 EXPOSE 3000 9229
 

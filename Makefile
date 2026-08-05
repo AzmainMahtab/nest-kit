@@ -1,4 +1,4 @@
-.PHONY: help dev dev-down prod prod-down down build logs ps sh db-up db-down psql redis-cli clean
+.PHONY: help dev dev-down prod prod-down down build logs ps sh db-up db-down psql redis-cli clean check keygen
 
 -include .env
 export
@@ -26,8 +26,27 @@ prod: ## Start the production stack
 prod-down: ## Stop the production stack
 	$(PROD) down
 
+# Volumes are not all declared in the base file — node_modules lives in the dev
+# overlay, so a bare `docker compose down -v` silently leaves it behind and the
+# next `make dev` boots against a stale node_modules.
 down: ## Stop everything and remove volumes
-	docker compose down -v
+	$(DEV) down -v
+
+# ==========================================
+# QUALITY GATES
+# ==========================================
+
+check: ## Run every gate: lint, typecheck, architecture, tests
+	pnpm run check
+
+keygen: ## Generate the ES256 keypair into certs/
+	@mkdir -p certs
+	@openssl ecparam -name prime256v1 -genkey -noout -out certs/private-ec.pem
+	@openssl pkcs8 -topk8 -nocrypt -in certs/private-ec.pem -out certs/private.pem
+	@openssl ec -in certs/private.pem -pubout -out certs/public.pem
+	@rm -f certs/private-ec.pem
+	@chmod 600 certs/private.pem
+	@echo "wrote certs/private.pem (PKCS#8) and certs/public.pem (SPKI)"
 
 # ==========================================
 # BUILD & INSPECT
@@ -62,5 +81,5 @@ redis-cli: ## Open a redis-cli shell
 	docker compose exec redis redis-cli
 
 clean: ## Remove containers, volumes, and the built image
-	docker compose down -v --remove-orphans
+	$(DEV) down -v --remove-orphans
 	-docker image rm nest-kit-api:$(or $(IMAGE_TAG),latest)

@@ -18,6 +18,11 @@ services:
       target: development
     environment:
       NODE_ENV: development
+      # pnpm 11 runs a deps-status check before `pnpm exec`. When the
+      # node_modules volume is stale relative to the bind-mounted lockfile it
+      # wants to purge and reinstall, prompts for confirmation, finds no TTY,
+      # and the container crash-loops. CI=true makes it purge and heal instead.
+      CI: "true"
     # --debug binds to 127.0.0.1 by default, which is unreachable from the
     # host; 0.0.0.0:9229 is what makes the published debug port usable.
     command: ["pnpm", "exec", "nest", "start", "--debug", "0.0.0.0:9229", "--watch"]
