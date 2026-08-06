@@ -16,3 +16,8 @@ process.env.OUTBOX_ENABLED = 'false';
 // dead letter, not the wall-clock spacing.
 process.env.DURABLE_MAX_DELIVER = '3';
 process.env.DURABLE_NAK_DELAY_MS = '150';
+
+// Deliberately longer than any suite takes, so an authorization test that
+// passes proves the cache was *invalidated* rather than that it happened to
+// expire. A short TTL here would turn a broken invalidation into a green run.
+process.env.RBAC_CACHE_TTL_SECONDS = '300';

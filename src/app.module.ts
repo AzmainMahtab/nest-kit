@@ -5,6 +5,7 @@ import { CarModule } from './modules/car';
 import { IdentityModule } from './modules/identity';
 import { NotificationModule } from './modules/notification';
 import { OwnerModule } from './modules/owner';
+import { RbacModule } from './modules/rbac';
 import { CacheModule } from './platform/cache/cache.module';
 import { ConfigModule } from './platform/config';
 import { CryptoModule } from './platform/crypto/crypto.module';
@@ -26,6 +27,7 @@ import { OutboxModule } from './platform/outbox';
     HealthModule,
     IdentityModule,
     AuthModule,
+    RbacModule,
     NotificationModule,
     OwnerModule,
     CarModule,
