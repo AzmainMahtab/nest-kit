@@ -55,12 +55,23 @@ WORKDIR /app
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
+COPY --chown=node:node docker-entrypoint.sh ./
 
 USER node
 
 EXPOSE 3000
 
-CMD ["node", "dist/main"]
+# The entrypoint dispatches serve / migrate / seed off the first argument, so
+# `docker compose run --rm api migrate` uses this same image and configuration.
+#
+# Invoked through `sh` rather than relying on the file's execute bit: the
+# development stage bind-mounts the host tree over /app, so the mode that
+# matters there is the one in the working copy, and a checkout that dropped it
+# (or `--chmod`, which needs BuildKit) would break the container rather than
+# fail the build. `exec` inside the script still replaces this shell, so signal
+# handling and enableShutdownHooks are unaffected.
+ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
+CMD ["serve"]
 
 # ============================================================
 # DEVELOPMENT STAGE
@@ -74,4 +85,8 @@ COPY --chown=node:node . .
 
 EXPOSE 3000 9229
 
-CMD ["pnpm", "run", "start:dev"]
+# Same entrypoint as production, so `migrate` and `seed` mean the same thing in
+# both stacks. It branches on NODE_ENV: here it runs from source through
+# ts-node and the watcher, there from compiled output in dist/.
+ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
+CMD ["serve"]

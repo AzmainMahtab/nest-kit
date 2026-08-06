@@ -15,6 +15,17 @@ const role = (name = 'support-agent') => {
   return created;
 };
 
+const protectedRole = (grants: readonly Permission[]) =>
+  Role.fromSnapshot({
+    uuid: 'role-uuid',
+    name: RoleName.of('admin'),
+    description: '',
+    isProtected: true,
+    grants: grants.map((permission) => ({ permission, grantedBy: null, grantedAt: NOW })),
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
 describe('Role', () => {
   it('records its creation', () => {
     const created = Role.create(RoleName.of('support-agent'), '', NOW);
@@ -70,19 +81,33 @@ describe('Role', () => {
     expect(subject.pullEvents()).toHaveLength(0);
   });
 
-  it('refuses to change a protected role, so admin cannot lock itself out', () => {
-    const admin = Role.fromSnapshot({
-      uuid: 'role-uuid',
-      name: RoleName.of('admin'),
-      description: '',
-      isProtected: true,
-      grants: [],
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
+  it('refuses to revoke from a protected role, so admin cannot lock itself out', () => {
+    const admin = protectedRole([permission('rbac:admin')]);
 
-    expect(() => admin.grant(permission('billing:refund'), null, LATER)).toThrow(AppError);
     expect(() => admin.revoke(PermissionName.of('rbac:admin'), LATER)).toThrow(AppError);
+    expect(admin.permissionNames).toEqual(['rbac:admin']);
+  });
+
+  it('still lets a protected role gain a permission, so the seed can extend it', () => {
+    // The asymmetry is deliberate: lockout comes from losing rbac:admin, never
+    // from gaining something. Forbidding grants would freeze `admin` at
+    // whatever the catalogue held the day it was created.
+    const admin = protectedRole([]);
+
+    admin.grant(permission('billing:refund'), null, LATER);
+
+    expect(admin.permissionNames).toEqual(['billing:refund']);
+  });
+
+  it('marks a role created via createProtected', () => {
+    const admin = Role.createProtected(RoleName.of('admin'), 'Full access', NOW);
+
+    expect(admin.isProtected).toBe(true);
+    expect(admin.pullEvents()).toMatchObject([{ name: 'rbac.role.created', roleName: 'admin' }]);
+  });
+
+  it('leaves a role created via create unprotected', () => {
+    expect(Role.create(RoleName.of('auditor'), '', NOW).isProtected).toBe(false);
   });
 
   it('clears its events once pulled so a re-save cannot re-emit', () => {

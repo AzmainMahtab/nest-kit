@@ -24,7 +24,6 @@ import {
   InvalidateGrantsOnRoleChange,
 } from './infrastructure/event-handlers/invalidate-grants.handler';
 import { TypeOrmRbacRepository } from './infrastructure/persistence/typeorm-rbac.repository';
-import { RbacBootstrap } from './infrastructure/rbac-bootstrap.service';
 import { PermissionsController } from './presentation/http/permissions.controller';
 import { RolesController } from './presentation/http/roles.controller';
 import { UserRolesController } from './presentation/http/user-roles.controller';
@@ -72,7 +71,6 @@ const handlers = [
     ...handlers,
     InvalidateGrantsOnAssignment,
     InvalidateGrantsOnRoleChange,
-    RbacBootstrap,
   ],
   exports: [AccessControl, RbacRepository],
 })

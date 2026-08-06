@@ -29,9 +29,11 @@ services:
       # wants to purge and reinstall, prompts for confirmation, finds no TTY,
       # and the container crash-loops. CI=true makes it purge and heal instead.
       CI: "true"
-    # --debug binds to 127.0.0.1 by default, which is unreachable from the
-    # host; 0.0.0.0:9229 is what makes the published debug port usable.
-    command: ["pnpm", "exec", "nest", "start", "--debug", "0.0.0.0:9229", "--watch"]
+    # Same verb as production. docker-entrypoint.sh branches on NODE_ENV and
+    # starts the watcher with the debugger bound to 0.0.0.0:9229 here, and
+    # `node dist/main` there — so `migrate` and `seed` also mean the same thing
+    # in both stacks.
+    command: ["serve"]
     volumes:
       - .:/app
       # Keeps the image's node_modules instead of letting the bind mount

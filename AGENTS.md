@@ -32,7 +32,10 @@ nest-kit/
 │   │   └── <context>.module.ts      # facade: providers in, exports out
 │   ├── platform/                    # db, cache, http, config, health, observability
 │   ├── shared/                      # shared kernel — pure, framework-free
-│   └── database/migrations/         # TypeORM migrations
+│   └── database/
+│       ├── migrations/              # TypeORM migrations
+│       └── seeds/                   # role/permission catalogue + superadmin (§14)
+├── scripts/                         # seed, openapi export, architecture gate
 └── test/                            # e2e only; unit tests live next to the code
 ```
 
@@ -233,8 +236,9 @@ Authentication is global and deny-by-default; **authorization is opt-in per rout
 - The guard reads the `AccessControl` port from `src/shared/application`, implemented by the `rbac` context. Nothing outside `modules/rbac/` sees a `Role` or a `Permission` — `platform/` must not import a bounded context, so `messaging:admin` appears there as a string literal, kept honest by an e2e test.
 - Grants are cached in Redis and evicted on assign/revoke/grant. `RBAC_CACHE_TTL_SECONDS` bounds a *lost* eviction; it is not the primary mechanism, and e2e runs with it set long enough that a broken eviction fails the suite instead of passing on expiry.
 - A role's permission grants are inside the `Role` aggregate; the users holding a role are not. That set is unbounded, and loading it to change one permission would read a table to write a row.
-- The seeded `admin` role is `is_protected`. It is the only role holding `rbac:admin`, so letting that be revoked would lock every administrator out of the endpoint that grants it back.
-- The first admin comes from `RBAC_BOOTSTRAP_ADMIN_EMAIL`, applied idempotently on boot. Assigning a role requires `rbac:admin`, so without it a fresh environment has no way in.
+- The seeded `admin` role is `is_protected`: it can **gain** a permission but never lose one. Lockout comes from losing `rbac:admin`, not from gaining something, and forbidding grants would freeze `admin` at whatever the catalogue held the day it was created.
+
+- The first administrator comes from `make seed`, never from booting — see §14.
 
 ---
 
@@ -425,3 +429,29 @@ What would break this, and is therefore forbidden:
 - Injecting another context's **concrete service or adapter**. Depending on another context's *port*, taken from its public index, is permitted and is how `auth` reads `identity` — at extraction time that port becomes a remote client and the use case is unchanged.
 - Cross-context foreign keys or joins added without a plan to denormalize.
 - Throwing `@nestjs/common` HTTP exceptions from `application/` or `domain/`.
+
+---
+
+## 14. Seeding
+
+`src/database/seeds/` holds the catalogue of roles and permissions and the first administrator. Run with `make seed`.
+
+- **Seeders are plain classes**, constructed by `scripts/seed.ts` from the application context. Not providers: nothing in the running application should be able to reach code whose job is to write data.
+- **Idempotent and additive.** Grant what the catalogue lists; never revoke what it does not, never reset a password, never delete. A deploy must not undo a grant an operator made by hand, and removal has a blast radius that belongs in a reviewed migration.
+- **Boot never seeds.** Starting the API does not write data. The previous boot-time bootstrap was one write raced by every replica, in a path nobody audits; provisioning is now an explicit command.
+- **A migration's inline seed is frozen; the catalogue is not.** `CreateRbac` seeds three permissions and `admin` — the historical record of how the schema arrived. New vocabulary goes in `rbac.catalog.ts` and the seed reconciles to it. Editing an applied migration changes nothing on a database that already ran it.
+- **`assertSeedAllowed` guards the target host**, not `NODE_ENV`. The shell's `NODE_ENV` is not evidence of anything; the host is what actually gets written to. `ALLOW_REMOTE_SEED=true` is the deliberate override.
+- Every permission in the catalogue must be required by a real route. A name nothing enforces grants nothing, and makes the catalogue overstate what RBAC controls.
+
+---
+
+## 15. Container Commands
+
+`docker-entrypoint.sh` dispatches on the first argument: `serve` (default), `migrate`, `seed`; anything else runs verbatim. It branches on `NODE_ENV` so the verbs mean the same thing in both stacks — development from mounted source through ts-node, production from `dist/` with no devDependencies.
+
+- **Entry points live in `src/`** — `main.ts`, `main.migrate.ts`, `main.seed.ts` — because only `src/` is compiled into the image. A `scripts/` file cannot be an entry point for a production container.
+- **`main.migrate.ts` boots `ConfigModule` alone**, not `AppModule`. Migrating is the one job that runs before the schema exists, and the relay and consumer service both query tables the migration is about to create.
+- **Never migrate on start.** Every replica would migrate at once with no cross-process lock, and a failure becomes a crash loop instead of a failed pipeline step. `migrationsRun` stays `false`. Deploy order is `migrate` → `seed` → `serve`.
+- **A one-shot command must exit, never hang.** Entry points call `process.exit(1)` on failure: a partially-initialised Nest context leaves the pool and Redis client holding open handles, and `exitCode` alone leaves the process wedged.
+- **`tsconfig.build.json` excludes `typeorm.config.ts`.** It is the only compiled file outside `src/`, so including it makes tsc infer the project root as the common root and emit `dist/src/main.js`, which is not where `CMD` looks.
+- **Secrets are mounted, never built in.** `certs/` is in `.dockerignore`; the production overlay bind-mounts it read-only.

@@ -29,6 +29,14 @@ services:
       target: production
     environment:
       NODE_ENV: production
+    volumes:
+      # The ES256 keypair is mounted, never baked in: .dockerignore excludes
+      # certs/ and *.pem because an image is a distributable artifact and a
+      # private key inside one leaks with every copy of it. Read-only — the
+      # application only ever reads these, and `make keygen` writes them on the
+      # host. A real deployment substitutes a secret manager or a k8s secret
+      # here; the contract is only that /app/certs exists at boot.
+      - ./certs:/app/certs:ro
     logging: *default-logging
     deploy:
       resources:

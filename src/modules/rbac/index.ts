@@ -3,12 +3,14 @@
  * here and nowhere else inside this folder (AGENTS.md §13), which is enforced by
  * `pnpm check:arch`.
  *
- * Note what is *not* here: `RbacRepository` is exported by the module for DI,
- * but the guard and every other consumer go through the `AccessControl` port in
- * `shared/application` instead. Authorization is a question anything may ask;
- * editing roles is not.
+ * `AccessControl` in `shared/application` is what the guard and every ordinary
+ * consumer use — authorization is a question anything may ask. `RbacRepository`
+ * is here for the one caller that legitimately administers the model rather
+ * than querying it: the seed, which is a composition-root concern and reaches
+ * into contexts by design.
  */
 export { RbacModule } from './rbac.module';
+export { RbacRepository } from './domain/ports/rbac-repository.port';
 export { Permission } from './domain/permission';
 export { Role } from './domain/role';
 export type { PermissionGrant } from './domain/role';

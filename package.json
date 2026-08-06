@@ -28,7 +28,9 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
-    "openapi:export": "ts-node -r tsconfig-paths/register scripts/export-openapi.ts"
+    "openapi:export": "ts-node -r tsconfig-paths/register scripts/export-openapi.ts",
+    "migrate": "ts-node -r tsconfig-paths/register src/main.migrate.ts",
+    "seed": "ts-node -r tsconfig-paths/register src/main.seed.ts"
   },
   "dependencies": {
     "@nats-io/jetstream": "^3.4.0",

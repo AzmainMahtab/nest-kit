@@ -99,7 +99,15 @@ export class AppConfig {
   get rbac() {
     return {
       cacheTtlSeconds: this.get('RBAC_CACHE_TTL_SECONDS'),
-      bootstrapAdminEmail: this.get('RBAC_BOOTSTRAP_ADMIN_EMAIL').trim(),
+    };
+  }
+
+  /** Read by `pnpm seed` only — never by the running application. */
+  get seed() {
+    return {
+      superadminEmail: this.get('SEED_SUPERADMIN_EMAIL').trim(),
+      superadminPassword: this.get('SEED_SUPERADMIN_PASSWORD'),
+      allowRemote: this.get('ALLOW_REMOTE_SEED'),
     };
   }
 

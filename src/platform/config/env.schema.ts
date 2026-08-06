@@ -53,9 +53,17 @@ export const envSchema = z.object({
   // Bounds how long a revoked role can still authorize a request if the
   // invalidation on assign/revoke is lost — keep it short.
   RBAC_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
-  // Granted the `admin` role on boot, idempotently, if the user exists. Empty
-  // disables the bootstrap entirely.
-  RBAC_BOOTSTRAP_ADMIN_EMAIL: z.string().default(''),
+
+  // Read by `pnpm seed` only; the running application never touches them.
+  // Both empty skips the superadmin seed and leaves the catalogue seed alone.
+  SEED_SUPERADMIN_EMAIL: z.string().default(''),
+  // Same floor as RegisterUserDto. A seeded administrator is the most valuable
+  // account in the system and must not be the one exempt from the rule.
+  SEED_SUPERADMIN_PASSWORD: z.string().min(12).or(z.literal('')).default(''),
+  ALLOW_REMOTE_SEED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),
