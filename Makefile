@@ -1,5 +1,6 @@
 .PHONY: help dev dev-down prod prod-down down build logs ps sh db-up db-down psql redis-cli clean check keygen \
-        migrate-create migrate-up migrate-down migrate-status
+        migrate-create migrate-up migrate-down migrate-status seed \
+        dev-migrate dev-seed prod-migrate prod-seed
 
 -include .env
 export
@@ -52,6 +53,28 @@ migrate-down: ## Revert the last migration
 
 migrate-status: ## Show applied and pending migrations
 	pnpm run migration:show
+
+# The relay and the consumers belong to the API; a short-lived seed process
+# starting them would attach JetStream consumers it is about to abandon. The
+# entrypoint sets the same two variables inside a container.
+seed: ## Seed roles, permissions and the superadmin (idempotent; safe to re-run)
+	OUTBOX_ENABLED=false DURABLE_CONSUMER_ENABLED=false pnpm run seed
+
+# ==========================================
+# IN-CONTAINER (same image, same config as the running API)
+# ==========================================
+
+dev-migrate: ## Apply migrations inside the development stack
+	$(DEV) run --rm api migrate
+
+dev-seed: ## Seed inside the development stack
+	$(DEV) run --rm api seed
+
+prod-migrate: ## Apply migrations inside the production stack
+	$(PROD) run --rm api migrate
+
+prod-seed: ## Seed inside the production stack
+	$(PROD) run --rm api seed
 
 keygen: ## Generate the ES256 keypair into certs/
 	@mkdir -p certs

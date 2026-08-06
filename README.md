@@ -35,6 +35,7 @@ pnpm install
 cp .env.example .env          # optional; every value has a default
 make db-up                    # Postgres + Redis + NATS
 make migrate-up               # apply migrations
+make seed                     # roles, permissions and the first admin
 pnpm start:dev                # or: make dev  (full stack in Docker)
 ```
 
@@ -42,9 +43,9 @@ pnpm start:dev                # or: make dev  (full stack in Docker)
 - Health: `http://localhost:3000/health` (deliberately outside the API prefix)
 - Swagger UI: `http://localhost:3000/docs` — see [API documentation](#api-documentation)
 
-Register an account, then set `RBAC_BOOTSTRAP_ADMIN_EMAIL` to its address and
-restart to make it an administrator. Without that nobody can reach the admin
-routes — see [Getting the first admin](#getting-the-first-admin).
+Set `SEED_SUPERADMIN_EMAIL` and `SEED_SUPERADMIN_PASSWORD` before seeding to get
+an administrator account. Without one, nobody can reach the admin routes — see
+[Seeding](#seeding).
 
 ---
 
@@ -69,7 +70,9 @@ src/
 ├── platform/                     # config, database, http, crypto, eventbus,
 │                                 # messaging, outbox, health
 ├── shared/                       # shared kernel — pure, framework-free
-└── database/migrations/
+└── database/
+    ├── migrations/
+    └── seeds/                    # role/permission catalogue + superadmin
 ```
 
 `shared/` is pure TypeScript: no `@nestjs/*`, no `typeorm`. `platform/` is where the framework lives.
@@ -177,13 +180,13 @@ The `admin` role holds all three and is **protected**: its permissions cannot be
 
 ### Getting the first admin
 
-Assigning a role requires `rbac:admin`, which only the `admin` role holds, so something has to break the circularity:
+Assigning a role requires `rbac:admin`, which only the `admin` role holds, so something has to break the circularity. `make seed` does — see [Seeding](#seeding).
 
 ```bash
-RBAC_BOOTSTRAP_ADMIN_EMAIL=ops@example.com
+SEED_SUPERADMIN_EMAIL=ops@example.com
+SEED_SUPERADMIN_PASSWORD=a-long-enough-password
+make seed
 ```
-
-On every boot, if that user exists, they are granted `admin`. Idempotent — a restart re-grants nothing and leaves the original audit row alone. On a fresh database, register the account and restart; until then the app logs a warning and carries on.
 
 ```bash
 # what am I allowed to do?
@@ -204,6 +207,85 @@ Assigning, revoking or changing a role's permissions evicts the affected users i
 3. Grant it to a role, and assign that role to whoever needs it.
 
 Creating a permission grants nothing on its own. If a route requires a name no role holds, it is simply unreachable.
+
+---
+
+## Seeding
+
+```bash
+make seed          # on the host
+make dev-seed      # inside the development stack
+make prod-seed     # inside the production stack
+```
+
+Idempotent and **additive**. Run it after migrating, on every deploy if you like — it creates what is missing and changes nothing else.
+
+### What it does
+
+| Step | |
+|---|---|
+| Permissions | creates any of `rbac:admin`, `rbac:read`, `messaging:admin` that are absent |
+| Roles | `admin` (protected, holds all three), `auditor` (`rbac:read`), `messaging-operator` (`messaging:admin`) |
+| Superadmin | creates `SEED_SUPERADMIN_EMAIL` as an **active** user and gives it `admin` |
+
+`auditor` and `messaging-operator` exist so that least privilege is the obvious default. Reaching for `admin` because no narrower role exists is how every account ends up with everything.
+
+The catalogue lives in [`src/database/seeds/rbac.catalog.ts`](src/database/seeds/rbac.catalog.ts). Add a permission there, add `@RequirePermissions()` to the route, re-run the seed.
+
+### What it will not do
+
+- **Never revokes.** The seed grants what the catalogue lists and ignores what it does not. A role an operator extended by hand must not be silently stripped by the next deploy, and removing a permission has a blast radius that belongs in a reviewed migration.
+- **Never resets a password.** An existing account is reused as-is, so re-running with a different `SEED_SUPERADMIN_PASSWORD` does nothing. Change a password through the application.
+- **Never seeds a non-local database** without `ALLOW_REMOTE_SEED=true`. The failure guarded against is a `.env` pointed at a shared database through a tunnel, followed by a reflex `make seed` that creates an administrator from local configuration. It is a host allowlist rather than a `NODE_ENV` check, because `NODE_ENV` is whatever the shell last exported while the host is the thing actually being written to.
+
+Omit either superadmin variable and the account step is skipped; roles and permissions are still reconciled.
+
+### Why not on boot
+
+Starting the API does not write data. An earlier version granted `admin` during `onApplicationBootstrap`; provisioning is now an explicit act, which keeps it out of every replica's startup path — they all raced to do the same write — and puts it in the shell history where it can be audited.
+
+The same reasoning applies to migrations, which is why the container has three commands rather than one that migrates and then serves — see [Container commands](#container-commands).
+
+### Seeds and migrations
+
+`CreateRbac` seeds the same three permissions and the `admin` role inline, and that duplication is deliberate. A migration is frozen the moment it ships: editing one that has already run changes nothing on a database that already applied it. The migration records how the schema arrived; the catalogue is where the vocabulary *grows*, and the seed reconciles a database to it.
+
+---
+
+## Container commands
+
+One image, three jobs, dispatched by `docker-entrypoint.sh` on the first argument:
+
+| Command | Does | Development | Production |
+|---|---|---|---|
+| `serve` *(default)* | Start the API | `nest start --debug 0.0.0.0:9229 --watch` | `node dist/main` |
+| `migrate` | Apply pending migrations, exit | `pnpm run migrate` | `node dist/main.migrate` |
+| `seed` | Reconcile the catalogue and superadmin, exit | `pnpm run seed` | `node dist/main.seed` |
+
+Anything else runs verbatim, so `docker compose run --rm api sh` still works.
+
+```bash
+docker compose run --rm api migrate      # or: make dev-migrate / make prod-migrate
+docker compose run --rm api seed         # or: make dev-seed    / make prod-seed
+```
+
+The script branches on `NODE_ENV`, so the verbs mean the same thing in both stacks — development runs from the mounted source through ts-node, production from compiled output with no devDependencies present.
+
+**Deploy order: `migrate` → `seed` → roll out `serve`.**
+
+### Why not migrate on start
+
+The tempting version is an entrypoint that migrates and then serves. It is wrong for the same reason boot does not seed:
+
+- On a rolling deploy **every replica migrates at once**. TypeORM wraps each migration in a transaction but takes no cross-process lock, so they race.
+- A failed migration becomes a **crash loop** instead of a failed pipeline step you can see and stop on.
+- A rollback has old and new code both trying to migrate.
+
+`migrationsRun` is `false` and `synchronize` is `false` everywhere, including test. The application assumes its schema already exists.
+
+### The keypair is mounted, never baked in
+
+`.dockerignore` excludes `certs/` and `*.pem`, because an image is a distributable artifact and a private key inside one leaks with every copy. The production overlay mounts `./certs:/app/certs:ro` at runtime; a real deployment substitutes a secret manager or a Kubernetes secret. The only contract is that `/app/certs` exists at boot — without it the container exits with `ENOENT: certs/private.pem`.
 
 ---
 
@@ -492,7 +574,10 @@ Forbidden because it breaks the above: importing another context's internals (on
 | Grant lookup | Redis cache-aside, evicted by the context's own events | The guard runs on every authorized request; a three-table join on that path is not affordable. Postgres stays authoritative, so a cache outage degrades latency, not correctness | Roles as JWT claims — revocation would lag until the token expires |
 | Eviction transport | In-process `@EventsHandler` | The cache is shared, so one replica's `DEL` serves all, and a lost eviction is already bounded by the TTL | `DurableEventHandler` — at-least-once machinery for a `DEL` |
 | Admin role | Seeded and `is_protected` | It is the only role holding `rbac:admin`; letting that be revoked locks everyone out of the endpoint that grants it back | Freely editable, recoverable by hand-written SQL |
-| First admin | `RBAC_BOOTSTRAP_ADMIN_EMAIL`, applied idempotently on boot | Assigning a role requires `rbac:admin`, so a fresh environment otherwise has no way in | A documented manual `INSERT` — the step that gets skipped |
+| First admin | `make seed`, from `SEED_SUPERADMIN_*` | Assigning a role requires `rbac:admin`, so a fresh environment otherwise has no way in | A documented manual `INSERT` — the step that gets skipped |
+| Seeding trigger | An explicit command | Booting must not write data: every replica raced to do the same write, and provisioning belongs in shell history where it can be audited | `onApplicationBootstrap` (what this replaced) |
+| Seed semantics | Additive — grants, never revokes | A deploy must not silently undo what an operator granted by hand; removing a permission belongs in a reviewed migration | Full reconciliation, catalogue as the only truth |
+| Seed safety | Host allowlist, `ALLOW_REMOTE_SEED` to override | `NODE_ENV` is whatever the shell last exported; the host is what is actually written to | `NODE_ENV !== 'production'` |
 
 ---
 
@@ -555,6 +640,9 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | `make db-up` / `make db-down` | Postgres + Redis + NATS only |
 | `make migrate-create NAME=X` | New empty migration |
 | `make migrate-up` / `migrate-down` / `migrate-status` | Apply / revert / inspect |
+| `make seed` | Roles, permissions and the superadmin — idempotent |
+| `make dev-migrate` / `dev-seed` | Same, inside the development stack |
+| `make prod-migrate` / `prod-seed` | Same, inside the production stack |
 | `make keygen` | ES256 keypair into `certs/` |
 | `pnpm openapi:export [file]` | Write the OpenAPI document (default `openapi.json`) |
 | `make psql` / `make redis-cli` / `make nats-info` | Inspect infrastructure |
@@ -587,7 +675,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | `UnitOfWork` over `AsyncLocalStorage`, nested calls join |
 | ✅ | `TransactionalRepository` base |
 | ✅ | Migration tooling, one schema per context |
-| ❌ | Seeding |
+| ✅ | Seeding — idempotent, additive, guarded against non-local hosts |
 | ❌ | Read replicas / connection routing |
 
 ### Messaging
@@ -630,8 +718,8 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 | | Item |
 |---|---|
-| ✅ | 147 unit tests — domain, value objects, use cases, guards, transactions, serialisation |
-| ✅ | 93 e2e tests against live Postgres, Redis and NATS |
+| ✅ | 173 unit tests — domain, value objects, use cases, guards, seeders, transactions, serialisation |
+| ✅ | 100 e2e tests against live Postgres, Redis and NATS |
 | ✅ | Shared `configureApp()` so tests cannot drift from production wiring |
 | ❌ | Load / soak testing |
 | ❌ | Coverage thresholds enforced in CI |
@@ -646,7 +734,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 **`401` on every route.** Expected — access is denied by default. Get a token (see [Authentication](#authentication)) or mark the route `@Public()`.
 
-**`403 FORBIDDEN` with a perfectly good token.** The token authenticated you; the route wants a permission you do not hold. `GET /api/rbac/me/grants` shows what you have. If it comes back empty on a fresh database, nobody has been made an admin yet — set `RBAC_BOOTSTRAP_ADMIN_EMAIL` to a registered account and restart.
+**`403 FORBIDDEN` with a perfectly good token.** The token authenticated you; the route wants a permission you do not hold. `GET /api/rbac/me/grants` shows what you have. If it comes back empty on a fresh database, nobody has been made an admin yet — set `SEED_SUPERADMIN_EMAIL`/`_PASSWORD` and run `make seed`.
 
 **A route 403s for everyone, including admin.** It requires a permission that is not in the catalogue, so no role can hold it. Compare the string in `@RequirePermissions()` against `GET /api/rbac/permissions`; a permission has to be created before a route can ask for it.
 

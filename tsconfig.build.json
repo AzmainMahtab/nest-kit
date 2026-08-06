@@ -1,4 +1,10 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  // typeorm.config.ts is excluded, and not only because the CLI does not belong
+  // in a runtime image: it is the sole compiled file outside src/, so including
+  // it makes tsc infer the project root as the common root and emit
+  // dist/src/main.js. Both `start:prod` and the Dockerfile CMD say
+  // `node dist/main`, so the production image built fine and then failed to
+  // start. With it excluded every input is under src/ and the paths line up.
+  "exclude": ["node_modules", "test", "dist", "scripts", "typeorm.config.ts", "**/*spec.ts"]
 }

@@ -60,6 +60,20 @@ export class Role {
     return role;
   }
 
+  /**
+   * A role the system defines rather than an administrator — `admin`. It can
+   * still gain permissions (the seed adds them as the catalogue grows) but can
+   * never lose one, which is what keeps it from being hollowed out.
+   *
+   * Only the seed calls this. There is no HTTP route that creates a protected
+   * role, deliberately: protection is a property of roles the code depends on.
+   */
+  static createProtected(name: RoleName, description: string, now: Date): Role {
+    const role = new Role(uuidv7(), name, description, true, [], now, now);
+    role.record(new RoleCreated(role.uuid, name.value));
+    return role;
+  }
+
   /** Rehydration from persistence. Records no events. */
   static fromSnapshot(snapshot: RoleSnapshot): Role {
     return new Role(
@@ -98,8 +112,6 @@ export class Role {
    * than an error, so a re-run of a provisioning script does not fail halfway.
    */
   grant(permission: Permission, grantedBy: string | null, now: Date): void {
-    this.assertNotProtected();
-
     if (this.holds(permission.name)) {
       return;
     }
@@ -138,10 +150,13 @@ export class Role {
   }
 
   /**
-   * The seeded `admin` role is frozen. It is the role that holds `rbac:admin`,
-   * so an administrator who revokes that permission from it locks every
-   * administrator out of the only endpoint that could grant it back — a state
-   * recoverable only by hand-written SQL. Curate a new role instead.
+   * A protected role can gain permissions but never lose one.
+   *
+   * The asymmetry is the point. Lockout comes from *losing* `rbac:admin` — the
+   * administrator who revokes it from `admin` shuts every administrator out of
+   * the only endpoint that could grant it back, recoverable only by
+   * hand-written SQL. Gaining a permission cannot cause that, and forbidding it
+   * would mean the seed could never extend `admin` as the catalogue grows.
    */
   private assertNotProtected(): void {
     if (this.isProtected) {
