@@ -96,6 +96,13 @@ export class AppConfig {
     };
   }
 
+  get rbac() {
+    return {
+      cacheTtlSeconds: this.get('RBAC_CACHE_TTL_SECONDS'),
+      bootstrapAdminEmail: this.get('RBAC_BOOTSTRAP_ADMIN_EMAIL').trim(),
+    };
+  }
+
   get jwt() {
     return {
       privateKeyPath: this.get('JWT_PRIVATE_KEY_PATH'),

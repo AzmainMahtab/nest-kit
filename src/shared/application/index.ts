@@ -1,3 +1,5 @@
+export { AccessControl, NO_GRANTS } from './ports/access-control.port';
+export type { Grants } from './ports/access-control.port';
 export { EventBus } from './ports/event-bus.port';
 export { UnitOfWork } from './ports/unit-of-work.port';
 export { Clock } from './ports/clock.port';

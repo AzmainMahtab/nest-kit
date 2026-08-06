@@ -1,10 +1,12 @@
 import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { RequirePermissions } from '../http/decorators/authorize.decorator';
 import {
   ApiAuthFailures,
   ApiEnvelope,
   ApiEnvelopeArray,
+  ApiFailure,
   ApiValidationFailure,
 } from '../http/swagger';
 import { OutboxRelay } from '../outbox/outbox.relay';
@@ -23,13 +25,20 @@ import { MessagingMetricsService } from './messaging-metrics.service';
  * Operational surface for the event pipeline: how far behind it is, what got
  * stuck, and how to push it through.
  *
- * ⚠️ Authenticated but not yet authorised. Until RBAC lands, any logged-in user
- * can replay and discard events. Restrict it with `@Roles('admin')` the moment
- * roles exist, or keep the route off the public ingress.
+ * Every route requires `messaging:admin`, applied at the class so a route added
+ * later inherits it rather than shipping open. Replaying and discarding events
+ * changes what downstream consumers see, so it is not something an ordinary
+ * authenticated user may do.
+ *
+ * The permission is named as a string rather than imported from the rbac
+ * context: platform code must not depend on a bounded context (AGENTS.md §2).
+ * The seed in `CreateRbac` and this literal are kept honest by an e2e test.
  */
 @ApiTags('Messaging admin')
 @ApiBearerAuth()
 @ApiAuthFailures()
+@ApiFailure(403, 'FORBIDDEN')
+@RequirePermissions('messaging:admin')
 @Controller('admin/messaging')
 export class MessagingAdminController {
   constructor(

@@ -217,6 +217,25 @@ Every refresh issues a new refresh token and stores its `jti` on the session. A 
 
 Public endpoints never bind privilege-bearing fields (`role`, `status`, `ownerId`) from the request body. `ValidationPipe` runs with `whitelist: true, forbidNonWhitelisted: true` globally; that is a backstop, not the rule.
 
+### RBAC
+
+Authentication is global and deny-by-default; **authorization is opt-in per route**:
+
+```ts
+@RequirePermissions('messaging:admin')     // any one of the named permissions
+@RequireRoles('admin')                     // the escape hatch — prefer the above
+```
+
+- **Name a permission, never a role, in a controller.** A permission is stable; which roles carry it is an operational decision that must be changeable without a deploy.
+- `AuthorizationGuard` ships attached to the decorator, not as an `APP_GUARD`. Two global guards would have to run in a fixed order to see the `CurrentUser` the first one attaches, and that order is the order modules happen to resolve in. A route-scoped guard always runs after every global one.
+- The rule is **any-of**. Requiring several permissions at once is deliberately not expressible — define a permission that means the combination, so the rule lives in the role rather than smeared across controllers.
+- Permission names are `resource:action`, lowercase. Case is **rejected**, not folded: `Billing:refund` and `billing:refund` existing as two rows would split a grant in half silently.
+- The guard reads the `AccessControl` port from `src/shared/application`, implemented by the `rbac` context. Nothing outside `modules/rbac/` sees a `Role` or a `Permission` — `platform/` must not import a bounded context, so `messaging:admin` appears there as a string literal, kept honest by an e2e test.
+- Grants are cached in Redis and evicted on assign/revoke/grant. `RBAC_CACHE_TTL_SECONDS` bounds a *lost* eviction; it is not the primary mechanism, and e2e runs with it set long enough that a broken eviction fails the suite instead of passing on expiry.
+- A role's permission grants are inside the `Role` aggregate; the users holding a role are not. That set is unbounded, and loading it to change one permission would read a table to write a row.
+- The seeded `admin` role is `is_protected`. It is the only role holding `rbac:admin`, so letting that be revoked would lock every administrator out of the endpoint that grants it back.
+- The first admin comes from `RBAC_BOOTSTRAP_ADMIN_EMAIL`, applied idempotently on boot. Assigning a role requires `rbac:admin`, so without it a fresh environment has no way in.
+
 ---
 
 ## 7. Events

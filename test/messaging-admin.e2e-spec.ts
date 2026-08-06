@@ -52,10 +52,23 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
     await dataSource.query('TRUNCATE messaging.processed_events');
     await dataSource.query('TRUNCATE notification.notifications RESTART IDENTITY');
 
-    await http()
+    await dataSource.query('TRUNCATE rbac.user_roles');
+
+    const registered = await http()
       .post('/api/users')
       .send({ email: 'ada@example.com', password: PASSWORD })
       .expect(201);
+
+    // Every route here now requires `messaging:admin`. Granted straight into
+    // the junction because that is what the boot-time bootstrap does — the
+    // route that would assign it already requires the role it is granting.
+    await dataSource.query(
+      `INSERT INTO rbac.user_roles (user_uuid, role_id)
+            SELECT $1, id FROM rbac.roles WHERE name = 'admin'
+       ON CONFLICT DO NOTHING`,
+      [ok<{ uuid: string }>(registered).uuid],
+    );
+
     const login = await http()
       .post('/api/auth/login')
       .send({ email: 'ada@example.com', password: PASSWORD })

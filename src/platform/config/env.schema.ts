@@ -50,6 +50,13 @@ export const envSchema = z.object({
   DURABLE_ACK_WAIT_MS: z.coerce.number().int().positive().default(30000),
   DURABLE_NAK_DELAY_MS: z.coerce.number().int().nonnegative().default(2000),
 
+  // Bounds how long a revoked role can still authorize a request if the
+  // invalidation on assign/revoke is lost — keep it short.
+  RBAC_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
+  // Granted the `admin` role on boot, idempotently, if the user exists. Empty
+  // disables the bootstrap entirely.
+  RBAC_BOOTSTRAP_ADMIN_EMAIL: z.string().default(''),
+
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),
   // Seconds, not a duration string: the tokenizer needs a number, and parsing

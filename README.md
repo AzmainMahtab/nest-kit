@@ -42,6 +42,10 @@ pnpm start:dev                # or: make dev  (full stack in Docker)
 - Health: `http://localhost:3000/health` (deliberately outside the API prefix)
 - Swagger UI: `http://localhost:3000/docs` — see [API documentation](#api-documentation)
 
+Register an account, then set `RBAC_BOOTSTRAP_ADMIN_EMAIL` to its address and
+restart to make it an administrator. Without that nobody can reach the admin
+routes — see [Getting the first admin](#getting-the-first-admin).
+
 ---
 
 ## Layout
@@ -57,6 +61,7 @@ src/
 │   │   └── queries/              # read use cases   (*.query.ts + *.handler.ts)
 │   ├── infrastructure/
 │   │   ├── persistence/          # orm-entities, mappers, repositories
+│   │   ├── cache/                # redis adapters
 │   │   └── event-handlers/       # durable + in-process subscribers
 │   ├── presentation/http/        # controllers, DTOs, Swagger
 │   ├── index.ts                  # the context's ONLY public surface
@@ -86,6 +91,7 @@ src/
 |---|---|---|
 | `identity` | users, credentials | the minimal context — the shape everything else follows |
 | `auth` | sessions, tokens | ES256, refresh rotation with replay detection, Redis revocation |
+| `rbac` | roles, permissions, assignments | a cached read model kept fresh by its own events; an aggregate that deliberately excludes an unbounded collection |
 | `owner` | car owners, linked to a user by uuid | a value object enforcing a domain rule; one-per-user uniqueness |
 | `car` | cars, linked to an owner by uuid | money as a decimal string; aggregate invariants; batch writes |
 | `notification` | queued notifications | the smallest possible durable subscriber |
@@ -138,6 +144,69 @@ Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }
 
 ---
 
+## Authorization (RBAC)
+
+Authentication is global and deny-by-default. **Authorization is opt-in per route**, because most routes need a caller, not a privilege:
+
+```ts
+@RequirePermissions('messaging:admin')   // any one of the named permissions
+@RequireRoles('admin')                   // the escape hatch — prefer the above
+```
+
+Name a **permission**, never a role, in a controller. `messaging:admin` means the same thing in a year; which roles carry it is an operational decision that should change without a deploy.
+
+Users hold roles, roles hold permissions, and a route checks permissions:
+
+```
+user ──< user_roles >── role ──< role_permissions >── permission ──> @RequirePermissions
+```
+
+Both junctions record **who** granted the row and **when** — the first question after an incident, and one that cannot be reconstructed later.
+
+### The seeded catalogue
+
+`make migrate-up` creates three permissions and one role:
+
+| Permission | Guards |
+|---|---|
+| `rbac:admin` | creating roles and permissions, granting and assigning them |
+| `rbac:read` | reading roles, permissions and assignments |
+| `messaging:admin` | the whole `/api/admin/messaging` surface |
+
+The `admin` role holds all three and is **protected**: its permissions cannot be changed. It is the only role seeded with `rbac:admin`, so revoking that would lock every administrator out of the endpoint that could grant it back — recoverable only by hand-written SQL. Curate a new role instead.
+
+### Getting the first admin
+
+Assigning a role requires `rbac:admin`, which only the `admin` role holds, so something has to break the circularity:
+
+```bash
+RBAC_BOOTSTRAP_ADMIN_EMAIL=ops@example.com
+```
+
+On every boot, if that user exists, they are granted `admin`. Idempotent — a restart re-grants nothing and leaves the original audit row alone. On a fresh database, register the account and restart; until then the app logs a warning and carries on.
+
+```bash
+# what am I allowed to do?
+curl localhost:3000/api/rbac/me/grants -H "Authorization: Bearer $TOKEN"
+# -> { "data": { "roles": ["admin"], "permissions": ["rbac:admin", ...] } }
+```
+
+### Freshness
+
+A user's resolved grants are cached in Redis — the guard runs on every authorized request, and resolving three tables each time would put a join on the critical path of the whole API. Correctness never depends on it: a miss, a decode failure or a Redis outage all fall through to Postgres.
+
+Assigning, revoking or changing a role's permissions evicts the affected users immediately, by reacting to the domain event after the transaction commits. `RBAC_CACHE_TTL_SECONDS` (default 60) bounds the one case eviction cannot cover — the process dying between the commit and the dispatch. It is a backstop, not the mechanism: the e2e suite runs with it set to 300s so a broken eviction fails the suite rather than passing on expiry.
+
+### Adding a permission
+
+1. `POST /api/rbac/permissions` with `{"name":"billing:refund"}` — lowercase `resource:action`. Case is rejected, not folded: `Billing:refund` and `billing:refund` as two rows would split a grant in half silently.
+2. Put `@RequirePermissions('billing:refund')` on the route.
+3. Grant it to a role, and assign that role to whoever needs it.
+
+Creating a permission grants nothing on its own. If a route requires a name no role holds, it is simply unreachable.
+
+---
+
 ## API
 
 | Method | Path | Auth |
@@ -150,20 +219,29 @@ Inside a handler, `@CurrentUser()` yields `{ uuid, sessionUuid, jti, expiresAt }
 | `POST` | `/api/auth/login` | public |
 | `POST` | `/api/auth/refresh` | public |
 | `POST` | `/api/auth/logout` | bearer |
-| `GET` | `/api/admin/messaging/status` | bearer ⚠️ |
-| `GET` | `/api/admin/messaging/outbox/dead-lettered` | bearer ⚠️ |
-| `POST` | `/api/admin/messaging/outbox/replay` | bearer ⚠️ |
-| `GET` | `/api/admin/messaging/dead-letters` | bearer ⚠️ |
-| `POST` | `/api/admin/messaging/dead-letters/discard` | bearer ⚠️ |
+| `GET` | `/api/admin/messaging/status` | `messaging:admin` |
+| `GET` | `/api/admin/messaging/outbox/dead-lettered` | `messaging:admin` |
+| `POST` | `/api/admin/messaging/outbox/replay` | `messaging:admin` |
+| `GET` | `/api/admin/messaging/dead-letters` | `messaging:admin` |
+| `POST` | `/api/admin/messaging/dead-letters/discard` | `messaging:admin` |
+| `GET` | `/api/rbac/me/grants` | bearer |
+| `POST` | `/api/rbac/permissions` | `rbac:admin` |
+| `GET` | `/api/rbac/permissions` | `rbac:read` |
+| `POST` | `/api/rbac/roles` | `rbac:admin` |
+| `GET` | `/api/rbac/roles`, `/api/rbac/roles/:uuid` | `rbac:read` |
+| `POST` | `/api/rbac/roles/:uuid/permissions` | `rbac:admin` |
+| `DELETE` | `/api/rbac/roles/:uuid/permissions/:permission` | `rbac:admin` |
+| `GET` | `/api/rbac/users/:uuid/roles`, `/api/rbac/users/:uuid/grants` | `rbac:read` |
+| `POST` | `/api/rbac/users/:uuid/roles` | `rbac:admin` |
+| `DELETE` | `/api/rbac/users/:uuid/roles/:roleUuid` | `rbac:admin` |
 | `POST` `GET` | `/api/owners`, `/api/owners/:uuid` | bearer |
 | `PATCH` | `/api/owners/:uuid/address`, `/api/owners/:uuid/deactivate` | bearer |
 | `POST` `GET` | `/api/cars`, `/api/cars/:uuid` | bearer |
 | `PATCH` | `/api/cars/:uuid/transfer`, `/price`, `/retire` | bearer |
 | `GET` | `/health` | public, outside the API prefix |
 
-⚠️ The admin routes are authenticated but **not yet authorised** — any logged-in
-user can replay and discard events. Restrict them with `@Roles('admin')` when
-RBAC lands, or keep them off the public ingress.
+A permission in the Auth column means bearer **plus** that permission; `rbac:admin`
+satisfies every route marked `rbac:read`. See [Authorization](#authorization-rbac).
 
 Full schemas and a live console at [`/docs`](#api-documentation).
 
@@ -239,6 +317,9 @@ use case               │                                (in-process, immediate
 | `auth.session.revoked` | logout, or replay detection |
 | `owner.owner.registered` · `.address-changed` · `.deactivated` · `.reactivated` | owner lifecycle |
 | `car.car.registered` · `.transferred` · `.repriced` · `.retired` | car lifecycle |
+| `rbac.permission.created` · `rbac.role.created` | the catalogue grows |
+| `rbac.role.permission-granted` · `.permission-revoked` | a role's permissions change |
+| `rbac.role.assigned` · `.unassigned` | a user gains or loses a role |
 
 Published to `evt.<name>` on the `DOMAIN_EVENTS` stream. Durable consumers:
 
@@ -249,6 +330,15 @@ Published to `evt.<name>` on the `DOMAIN_EVENTS` stream. Durable consumers:
 | `car_retire_on_owner_deactivated` | `owner.owner.deactivated` | retires that owner's cars |
 
 The last two form a **two-hop choreography** — deleting a user deactivates their owner record, which retires their cars — with no context importing another's internals and no foreign keys between schemas.
+
+In-process `@EventsHandler` subscribers, for work that is worthless if it arrives late:
+
+| Handler | Subscribes to | Does |
+|---|---|---|
+| `InvalidateGrantsOnAssignment` | `rbac.role.assigned` · `.unassigned` | evicts that user's cached grants |
+| `InvalidateGrantsOnRoleChange` | `rbac.role.permission-granted` · `.permission-revoked` | expands the role to its holders and evicts each |
+
+Both are in-process rather than durable on purpose: the cache is Redis, so one replica's `DEL` serves every replica, and the only failure mode — a lost eviction — is already bounded by `RBAC_CACHE_TTL_SECONDS`. Adding at-least-once machinery would buy nothing.
 
 ---
 
@@ -347,6 +437,8 @@ Every persistence adapter extends `TransactionalRepository` and goes through `ma
 | Commands | plain classes, no decorators, no validation |
 | Controllers | decode → dispatch → map. No business logic, no repository access |
 | Validation | global `ValidationPipe({ whitelist, forbidNonWhitelisted, transform })` |
+| Authentication | global and deny-by-default; `@Public()` is the only opt-out |
+| Authorization | opt-in per route with `@RequirePermissions('resource:action')`. Name a permission, never a role |
 | Config | `platform/config` only — `process.env` elsewhere is a gate failure |
 | Docs | `@ApiEnvelope` / `@ApiFailure`, never bare `@ApiResponse({ type })` — the raw DTO is not what goes on the wire |
 | Money | never `number`; a decimal string end to end |
@@ -354,9 +446,11 @@ Every persistence adapter extends `TransactionalRepository` and goes through `ma
 
 ### 8. Migrations own the schema
 
-`synchronize: false` in every environment, test included. One schema per bounded context (`identity.`, `notification.`, `outbox.`, `messaging.`) — it makes the extraction cut line visible in the database.
+`synchronize: false` in every environment, test included. One schema per bounded context (`identity.`, `auth.`, `rbac.`, `owner.`, `car.`, `notification.`, `outbox.`, `messaging.`) — it makes the extraction cut line visible in the database.
 
 Every table: `id BIGSERIAL PRIMARY KEY`, `uuid UUID NOT NULL UNIQUE`, `created_at`/`updated_at`/`deleted_at` as `TIMESTAMPTZ`. No explicit index on `uuid` — the `UNIQUE` constraint already creates the btree, and a second is pure write and disk overhead.
+
+The exception is a table whose identity *is* its natural key — `rbac.role_permissions`, `rbac.user_roles`, `messaging.processed_events`. Those take a composite primary key and no `uuid`, because a surrogate key would add an index nothing ever reads.
 
 Soft-delete uniqueness is a **partial** index (`WHERE deleted_at IS NULL`), so a deleted row does not permanently reserve its value. Repository queries must match that predicate or the database and the application will disagree about what is taken.
 
@@ -393,6 +487,12 @@ Forbidden because it breaks the above: importing another context's internals (on
 | Env validation | zod at boot | Fail fast with a readable message, typed everywhere after | Runtime `process.env` reads |
 | Password hashing | `@node-rs/argon2` | Prebuilt musl binaries; the alpine image needs no toolchain | `argon2` (node-gyp) |
 | Test env overrides | `test/setup-e2e.ts` | `ConfigModule.forRoot()` reads env at import time, so in-spec assignment is too late and silently does nothing | `process.env` at the top of a spec |
+| Authorization unit | Permission named in the route, role named nowhere in code | A permission is stable; which roles carry it is operational and must change without a deploy | `@Roles('admin')` on controllers |
+| Authorization guard | Route-scoped, shipped by the decorator | A second `APP_GUARD` must run after `JwtAuthGuard` to see the caller it attaches, and global order is module-resolution order — a silent 401 waiting to happen. Route guards always run after global ones | A second global `APP_GUARD` |
+| Grant lookup | Redis cache-aside, evicted by the context's own events | The guard runs on every authorized request; a three-table join on that path is not affordable. Postgres stays authoritative, so a cache outage degrades latency, not correctness | Roles as JWT claims — revocation would lag until the token expires |
+| Eviction transport | In-process `@EventsHandler` | The cache is shared, so one replica's `DEL` serves all, and a lost eviction is already bounded by the TTL | `DurableEventHandler` — at-least-once machinery for a `DEL` |
+| Admin role | Seeded and `is_protected` | It is the only role holding `rbac:admin`; letting that be revoked locks everyone out of the endpoint that grants it back | Freely editable, recoverable by hand-written SQL |
+| First admin | `RBAC_BOOTSTRAP_ADMIN_EMAIL`, applied idempotently on boot | Assigning a role requires `rbac:admin`, so a fresh environment otherwise has no way in | A documented manual `INSERT` — the step that gets skipped |
 
 ---
 
@@ -426,6 +526,8 @@ Forbidden because it breaks the above: importing another context's internals (on
 | Cross-context reaction | the two durable handlers above |
 | Batch write in one transaction | `CarRepository.saveAll` when an owner's cars are retired together |
 | Partial index for the hot query | `cars_active_owner_idx` covers exactly the deactivation reaction |
+| Drawing an aggregate boundary | `rbac`'s `Role` owns its permission grants but not the users holding it — that set is unbounded |
+| A cached read model kept fresh | `RedisAccessControl` plus the two in-process invalidators, with the TTL as a backstop, not the mechanism |
 
 Clone that shape rather than inventing one.
 
@@ -433,7 +535,7 @@ Clone that shape rather than inventing one.
 2. **Domain first** — entity with behaviour, value objects, `errors.ts` as `AppError` factories, `events/`, and `ports/` as `abstract class`. No framework imports.
 3. **Application** — one file per use case, `*.command.ts` plus `*.handler.ts`. Wrap writes in `uow.withTransaction` and publish inside it.
 4. **Infrastructure** — `*.orm-entity.ts`, `*.mapper.ts`, `*-repository.ts` extending `TransactionalRepository`. The ORM entity never leaves this folder.
-5. **Presentation** — controller plus `dto/`. Routes are protected unless marked `@Public()`.
+5. **Presentation** — controller plus `dto/`. Routes are authenticated unless marked `@Public()`; add `@RequirePermissions('<context>:<action>')` where a route needs more than a caller, and create the permission so a role can hold it.
 6. **Migration** — `make migrate-create NAME=X`, its own schema, `BIGSERIAL` + `uuid`, no cross-context foreign keys.
 7. **`index.ts`** exporting only the module, its ports, entities and events — never adapters or handlers.
 8. Register in `app.module.ts`, then `make check`.
@@ -510,7 +612,8 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | `owner` + `car` — the worked reference pair (see below) |
 | ✅ | `auth` — ES256, `typ` claim, refresh rotation with replay detection, Redis blacklist |
 | ✅ | Global auth guard, deny by default, `@Public()` opt-out |
-| ❌ | RBAC — roles, permissions, `@Roles()` guard |
+| ✅ | `rbac` — roles, permissions, audited assignments, cached grants with event-driven eviction |
+| ✅ | `@RequirePermissions()` / `@RequireRoles()`, enforced on `/api/admin/messaging` |
 
 ### Operations
 
@@ -527,8 +630,8 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 | | Item |
 |---|---|
-| ✅ | 103 unit tests — domain, value objects, use cases, transactions, serialisation |
-| ✅ | 71 e2e tests against live Postgres, Redis and NATS |
+| ✅ | 147 unit tests — domain, value objects, use cases, guards, transactions, serialisation |
+| ✅ | 93 e2e tests against live Postgres, Redis and NATS |
 | ✅ | Shared `configureApp()` so tests cannot drift from production wiring |
 | ❌ | Load / soak testing |
 | ❌ | Coverage thresholds enforced in CI |
@@ -542,6 +645,10 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 **A route 404s in the browser but works in `curl`.** A browser only issues `GET`. `POST /api/auth/login` is POST-only, and Nest matches method and path together, so a `GET` is simply an unmatched route. Use `/docs` and its *Try it out*, or `curl -X POST`.
 
 **`401` on every route.** Expected — access is denied by default. Get a token (see [Authentication](#authentication)) or mark the route `@Public()`.
+
+**`403 FORBIDDEN` with a perfectly good token.** The token authenticated you; the route wants a permission you do not hold. `GET /api/rbac/me/grants` shows what you have. If it comes back empty on a fresh database, nobody has been made an admin yet — set `RBAC_BOOTSTRAP_ADMIN_EMAIL` to a registered account and restart.
+
+**A route 403s for everyone, including admin.** It requires a permission that is not in the catalogue, so no role can hold it. Compare the string in `@RequirePermissions()` against `GET /api/rbac/permissions`; a permission has to be created before a route can ask for it.
 
 **Boot fails reading `certs/private.pem`.** Run `make keygen`. The keypair is gitignored, so every clone and every CI run needs its own.
 
