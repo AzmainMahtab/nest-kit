@@ -40,7 +40,7 @@ describe('Seeds (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', (
   // Not async: supertest's chainable `.expect()` lives on the Test object, and
   // wrapping it in a promise would hand back something that only has `.then`.
   const login = (password: string) =>
-    http().post('/api/auth/login').send({ email: EMAIL, password });
+    http().post('/api/v1/auth/login').send({ email: EMAIL, password });
 
   const roles = () =>
     dataSource.query<RoleRow[]>(
@@ -166,8 +166,8 @@ describe('Seeds (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', (
       const session = await login(PASSWORD).expect(200);
       const auth = `Bearer ${ok<{ accessToken: string }>(session).accessToken}`;
 
-      await http().get('/api/rbac/roles').set('Authorization', auth).expect(200);
-      await http().get('/api/admin/messaging/status').set('Authorization', auth).expect(200);
+      await http().get('/api/v1/rbac/roles').set('Authorization', auth).expect(200);
+      await http().get('/api/v1/admin/messaging/status').set('Authorization', auth).expect(200);
     });
 
     it('does not reset the password of an account that already exists', async () => {

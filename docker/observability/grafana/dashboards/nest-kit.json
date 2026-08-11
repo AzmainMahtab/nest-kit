@@ -1,0 +1,236 @@
+{
+  "uid": "nest-kit-overview",
+  "title": "nest-kit — API and messaging",
+  "description": "Traffic, latency and event-pipeline backlog. Alert here, then follow a correlationId into the logs panel at the bottom.",
+  "tags": ["nest-kit"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "editable": true,
+  "panels": [
+    {
+      "type": "row",
+      "title": "HTTP",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate by status",
+      "description": "Every response, including the 404s and 429s no controller ever saw.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status_code) (rate(http_requests_total[5m]))",
+          "legendFormat": "{{status_code}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Server error ratio",
+      "description": "5xx as a share of all traffic. The alert fires above 5% for five minutes.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 9, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{status_code=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 0.001)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "p99 latency by route",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Messaging",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox backlog",
+      "description": "Events committed but not yet published. A steady small number is healthy.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "outbox_pending_events", "legendFormat": "pending" },
+        {
+          "refId": "B",
+          "expr": "outbox_dead_lettered_events",
+          "legendFormat": "dead-lettered"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Oldest unpublished event",
+      "description": "The number to alert on — a count can stay flat while one row is stuck for an hour.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 9, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 60 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [{ "refId": "A", "expr": "outbox_oldest_pending_age_seconds" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumer lag",
+      "description": "Messages a durable consumer has not received yet.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "consumer_pending_messages",
+          "legendFormat": "{{consumer}} pending"
+        },
+        {
+          "refId": "B",
+          "expr": "consumer_ack_pending_messages",
+          "legendFormat": "{{consumer}} in flight"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Event throughput",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (event_type) (rate(events_published_total[5m]))",
+          "legendFormat": "published {{event_type}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (outcome) (rate(events_consumed_total[5m]))",
+          "legendFormat": "consumed {{outcome}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (event_type) (rate(events_dlq_total[5m]))",
+          "legendFormat": "dead-lettered {{event_type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate-limit rejections",
+      "description": "A rising `auth` scope is someone guessing passwords.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 9, "y": 18 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scope) (rate(rate_limit_rejected_total[5m]))",
+          "legendFormat": "{{scope}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Broker",
+      "description": "0 means events are queuing in the outbox. The API keeps serving.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unreachable", "color": "red", "index": 0 },
+                "1": { "text": "connected", "color": "green", "index": 1 }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [{ "refId": "A", "expr": "messaging_broker_reachable" }]
+    },
+    {
+      "type": "row",
+      "title": "Logs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 }
+    },
+    {
+      "type": "logs",
+      "title": "Errors",
+      "description": "Copy a correlationId from a line here, then query {service=\"api\"} | json | correlationId=\"…\" to get that one request end to end.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 27 },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [{ "refId": "A", "expr": "{service=\"api\", level=\"error\"}" }]
+    }
+  ]
+}

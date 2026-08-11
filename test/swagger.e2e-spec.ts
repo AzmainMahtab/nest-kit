@@ -114,7 +114,7 @@ describe('OpenAPI (e2e — requires Postgres, Redis, NATS)', () => {
   });
 
   it('documents failures as the error envelope with the matchable code', () => {
-    const conflict = jsonSchema('/api/users', 'post', '409');
+    const conflict = jsonSchema('/api/v1/users', 'post', '409');
 
     expect(conflict.allOf?.[0]?.$ref).toBe('#/components/schemas/ErrorEnvelopeDto');
     expect(conflict.allOf?.[1]?.properties?.error?.properties?.code?.example).toBe(
@@ -123,12 +123,16 @@ describe('OpenAPI (e2e — requires Postgres, Redis, NATS)', () => {
   });
 
   it('declares bearer auth on exactly the routes the guard protects', () => {
-    // The four @Public() routes, and nothing else, may be documented as open.
+    // The @Public() routes, and nothing else, may be documented as open.
+    // Probes and the metrics scrape are open for the same reason as the
+    // health check: nothing scraping an instance holds a bearer token.
     const PUBLIC = new Set([
-      'POST /api/users',
-      'POST /api/auth/login',
-      'POST /api/auth/refresh',
+      'POST /api/v1/users',
+      'POST /api/v1/auth/login',
+      'POST /api/v1/auth/refresh',
       'GET /health',
+      'GET /health/ready',
+      'GET /metrics',
     ]);
 
     const wrong: string[] = [];
@@ -151,12 +155,12 @@ describe('OpenAPI (e2e — requires Postgres, Redis, NATS)', () => {
   });
 
   it('matches what the API actually returns, field for field', async () => {
-    const documented = jsonSchema('/api/users', 'post', '201');
+    const documented = jsonSchema('/api/v1/users', 'post', '201');
     const dataRef = documented.allOf?.[1]?.properties?.data;
     const documentedFields = Object.keys(deref(dataRef!).properties ?? {}).sort();
 
     const response = await http()
-      .post('/api/users')
+      .post('/api/v1/users')
       .send({ email: 'ada@example.com', password: PASSWORD })
       .expect(201);
 
@@ -170,10 +174,10 @@ describe('OpenAPI (e2e — requires Postgres, Redis, NATS)', () => {
   });
 
   it('matches a real error response too', async () => {
-    await http().post('/api/users').send({ email: 'ada@example.com', password: PASSWORD });
+    await http().post('/api/v1/users').send({ email: 'ada@example.com', password: PASSWORD });
 
     const response = await http()
-      .post('/api/users')
+      .post('/api/v1/users')
       .send({ email: 'ada@example.com', password: PASSWORD })
       .expect(409);
 

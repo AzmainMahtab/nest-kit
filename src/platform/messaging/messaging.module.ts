@@ -6,6 +6,7 @@ import { OutboxModule } from '../outbox';
 import { DeadLetterRepository } from './dead-letter.repository';
 import { DurableConsumerService } from './durable-consumer.service';
 import { MessagingAdminController } from './messaging-admin.controller';
+import { MessagingMetricsCollector } from './messaging-metrics.collector';
 import { MessagingMetricsService } from './messaging-metrics.service';
 import { NatsClient } from './nats-client';
 import { NatsPublisher } from './nats-publisher';
@@ -22,6 +23,7 @@ import { ProcessedEventRepository } from './processed-event.repository';
     DeadLetterRepository,
     DurableConsumerService,
     MessagingMetricsService,
+    MessagingMetricsCollector,
   ],
   exports: [
     MessagePublisher,

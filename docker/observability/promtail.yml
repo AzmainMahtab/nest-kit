@@ -1,0 +1,52 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: compose
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          # This project's containers only. Without the filter, every
+          # container on the machine ends up in Loki.
+          - name: label
+            values: ["com.docker.compose.project=nest-kit"]
+
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+
+    pipeline_stages:
+      # Only the API speaks JSON. Postgres and NATS write their own formats,
+      # and running the json stage over them fills the log with parse errors.
+      - match:
+          selector: '{service="api"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  context: context
+                  correlationId: correlationId
+                  message: message
+            # `level` and `context` are labels — a handful of values each, and
+            # what you filter by first. `correlationId` deliberately is not:
+            # one label value per request would multiply Loki's index by the
+            # request rate. It stays a parsed field, queried with
+            # `{service="api"} | json | correlationId="…"`, which is exactly
+            # as fast for the one request you are chasing.
+            - labels:
+                level:
+                context:
+            - timestamp:
+                source: timestamp
+                format: RFC3339Nano

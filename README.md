@@ -24,6 +24,8 @@ The authoritative rules live in [`AGENTS.md`](AGENTS.md). This README summarises
 | Passwords | Argon2id (`@node-rs/argon2`) |
 | Tokens | ES256 (ECDSA P-256) via `jose` |
 | Validation | class-validator at the HTTP boundary, zod for environment |
+| Observability | `prom-client` metrics, JSON logs, correlation id; Prometheus + Loki + Grafana in an overlay |
+| Rate limiting | Redis fixed window, shared across replicas |
 | Quality | eslint + prettier + strict tsc + a custom architecture gate |
 
 ---
@@ -39,9 +41,13 @@ make seed                     # roles, permissions and the first admin
 pnpm start:dev                # or: make dev  (full stack in Docker)
 ```
 
-- API: `http://localhost:3000/api`
-- Health: `http://localhost:3000/health` (deliberately outside the API prefix)
+- API: `http://localhost:3000/api/v1`
+- Health: `http://localhost:3000/health`, readiness at `/health/ready` (deliberately outside the prefix *and* the version)
+- Metrics: `http://localhost:3000/metrics` (Prometheus text format)
 - Swagger UI: `http://localhost:3000/docs` — see [API documentation](#api-documentation)
+
+`make obs-up` adds Prometheus, Loki and Grafana on top of the dev stack — see
+[Observability](#observability).
 
 Set `SEED_SUPERADMIN_EMAIL` and `SEED_SUPERADMIN_PASSWORD` before seeding to get
 an administrator account. Without one, nobody can reach the admin routes — see
@@ -68,7 +74,7 @@ src/
 │   ├── index.ts                  # the context's ONLY public surface
 │   └── <context>.module.ts
 ├── platform/                     # config, database, http, crypto, eventbus,
-│                                 # messaging, outbox, health
+│                                 # messaging, outbox, health, observability
 ├── shared/                       # shared kernel — pure, framework-free
 └── database/
     ├── migrations/
@@ -115,24 +121,25 @@ any of them liftable into its own service (§10).
 
 | Public route | Why |
 |---|---|
-| `POST /api/users` | registration must precede having a token |
-| `POST /api/auth/login` · `POST /api/auth/refresh` | they *produce* tokens |
-| `GET /health` | probes run without credentials |
+| `POST /api/v1/users` | registration must precede having a token |
+| `POST /api/v1/auth/login` · `POST /api/v1/auth/refresh` | they *produce* tokens |
+| `GET /health` · `GET /health/ready` | probes run without credentials |
+| `GET /metrics` | a Prometheus scrape has no bearer token |
 
 ```bash
 # 1. register
-curl -X POST localhost:3000/api/users \
+curl -X POST localhost:3000/api/v1/users \
   -H 'content-type: application/json' \
   -d '{"email":"ada@example.com","password":"correct-horse-battery"}'
 
 # 2. log in -> { accessToken, refreshToken, expiresAt }
-TOKEN=$(curl -sX POST localhost:3000/api/auth/login \
+TOKEN=$(curl -sX POST localhost:3000/api/v1/auth/login \
   -H 'content-type: application/json' \
   -d '{"email":"ada@example.com","password":"correct-horse-battery"}' \
   | jq -r .data.accessToken)
 
 # 3. call anything
-curl localhost:3000/api/users -H "Authorization: Bearer $TOKEN"
+curl localhost:3000/api/v1/users -H "Authorization: Bearer $TOKEN"
 ```
 
 `make keygen` must have run first — the tokenizer reads `certs/private.pem` at boot.
@@ -174,7 +181,7 @@ Both junctions record **who** granted the row and **when** — the first questio
 |---|---|
 | `rbac:admin` | creating roles and permissions, granting and assigning them |
 | `rbac:read` | reading roles, permissions and assignments |
-| `messaging:admin` | the whole `/api/admin/messaging` surface |
+| `messaging:admin` | the whole `/api/v1/admin/messaging` surface |
 
 The `admin` role holds all three and is **protected**: its permissions cannot be changed. It is the only role seeded with `rbac:admin`, so revoking that would lock every administrator out of the endpoint that could grant it back — recoverable only by hand-written SQL. Curate a new role instead.
 
@@ -190,7 +197,7 @@ make seed
 
 ```bash
 # what am I allowed to do?
-curl localhost:3000/api/rbac/me/grants -H "Authorization: Bearer $TOKEN"
+curl localhost:3000/api/v1/rbac/me/grants -H "Authorization: Bearer $TOKEN"
 # -> { "data": { "roles": ["admin"], "permissions": ["rbac:admin", ...] } }
 ```
 
@@ -202,7 +209,7 @@ Assigning, revoking or changing a role's permissions evicts the affected users i
 
 ### Adding a permission
 
-1. `POST /api/rbac/permissions` with `{"name":"billing:refund"}` — lowercase `resource:action`. Case is rejected, not folded: `Billing:refund` and `billing:refund` as two rows would split a grant in half silently.
+1. `POST /api/v1/rbac/permissions` with `{"name":"billing:refund"}` — lowercase `resource:action`. Case is rejected, not folded: `Billing:refund` and `billing:refund` as two rows would split a grant in half silently.
 2. Put `@RequirePermissions('billing:refund')` on the route.
 3. Grant it to a role, and assign that role to whoever needs it.
 
@@ -293,39 +300,111 @@ The tempting version is an entrypoint that migrates and then serves. It is wrong
 
 | Method | Path | Auth |
 |---|---|---|
-| `POST` | `/api/users` | public |
-| `GET` | `/api/users` | bearer |
-| `GET` | `/api/users/:uuid` | bearer |
-| `PATCH` | `/api/users/:uuid` | bearer |
-| `DELETE` | `/api/users/:uuid` | bearer (soft delete) |
-| `POST` | `/api/auth/login` | public |
-| `POST` | `/api/auth/refresh` | public |
-| `POST` | `/api/auth/logout` | bearer |
-| `GET` | `/api/admin/messaging/status` | `messaging:admin` |
-| `GET` | `/api/admin/messaging/outbox/dead-lettered` | `messaging:admin` |
-| `POST` | `/api/admin/messaging/outbox/replay` | `messaging:admin` |
-| `GET` | `/api/admin/messaging/dead-letters` | `messaging:admin` |
-| `POST` | `/api/admin/messaging/dead-letters/discard` | `messaging:admin` |
-| `GET` | `/api/rbac/me/grants` | bearer |
-| `POST` | `/api/rbac/permissions` | `rbac:admin` |
-| `GET` | `/api/rbac/permissions` | `rbac:read` |
-| `POST` | `/api/rbac/roles` | `rbac:admin` |
-| `GET` | `/api/rbac/roles`, `/api/rbac/roles/:uuid` | `rbac:read` |
-| `POST` | `/api/rbac/roles/:uuid/permissions` | `rbac:admin` |
-| `DELETE` | `/api/rbac/roles/:uuid/permissions/:permission` | `rbac:admin` |
-| `GET` | `/api/rbac/users/:uuid/roles`, `/api/rbac/users/:uuid/grants` | `rbac:read` |
-| `POST` | `/api/rbac/users/:uuid/roles` | `rbac:admin` |
-| `DELETE` | `/api/rbac/users/:uuid/roles/:roleUuid` | `rbac:admin` |
-| `POST` `GET` | `/api/owners`, `/api/owners/:uuid` | bearer |
-| `PATCH` | `/api/owners/:uuid/address`, `/api/owners/:uuid/deactivate` | bearer |
-| `POST` `GET` | `/api/cars`, `/api/cars/:uuid` | bearer |
-| `PATCH` | `/api/cars/:uuid/transfer`, `/price`, `/retire` | bearer |
-| `GET` | `/health` | public, outside the API prefix |
+| `POST` | `/api/v1/users` | public |
+| `GET` | `/api/v1/users` | bearer |
+| `GET` | `/api/v1/users/:uuid` | bearer |
+| `PATCH` | `/api/v1/users/:uuid` | bearer |
+| `DELETE` | `/api/v1/users/:uuid` | bearer (soft delete) |
+| `POST` | `/api/v1/auth/login` | public |
+| `POST` | `/api/v1/auth/refresh` | public |
+| `POST` | `/api/v1/auth/logout` | bearer |
+| `GET` | `/api/v1/admin/messaging/status` | `messaging:admin` |
+| `GET` | `/api/v1/admin/messaging/outbox/dead-lettered` | `messaging:admin` |
+| `POST` | `/api/v1/admin/messaging/outbox/replay` | `messaging:admin` |
+| `GET` | `/api/v1/admin/messaging/dead-letters` | `messaging:admin` |
+| `POST` | `/api/v1/admin/messaging/dead-letters/discard` | `messaging:admin` |
+| `GET` | `/api/v1/rbac/me/grants` | bearer |
+| `POST` | `/api/v1/rbac/permissions` | `rbac:admin` |
+| `GET` | `/api/v1/rbac/permissions` | `rbac:read` |
+| `POST` | `/api/v1/rbac/roles` | `rbac:admin` |
+| `GET` | `/api/v1/rbac/roles`, `/api/v1/rbac/roles/:uuid` | `rbac:read` |
+| `POST` | `/api/v1/rbac/roles/:uuid/permissions` | `rbac:admin` |
+| `DELETE` | `/api/v1/rbac/roles/:uuid/permissions/:permission` | `rbac:admin` |
+| `GET` | `/api/v1/rbac/users/:uuid/roles`, `/api/v1/rbac/users/:uuid/grants` | `rbac:read` |
+| `POST` | `/api/v1/rbac/users/:uuid/roles` | `rbac:admin` |
+| `DELETE` | `/api/v1/rbac/users/:uuid/roles/:roleUuid` | `rbac:admin` |
+| `POST` `GET` | `/api/v1/owners`, `/api/v1/owners/:uuid` | bearer |
+| `PATCH` | `/api/v1/owners/:uuid/address`, `/api/v1/owners/:uuid/deactivate` | bearer |
+| `POST` `GET` | `/api/v1/cars`, `/api/v1/cars/:uuid` | bearer |
+| `PATCH` | `/api/v1/cars/:uuid/transfer`, `/price`, `/retire` | bearer |
+| `GET` | `/health` | public, unversioned, outside the prefix |
+| `GET` | `/health/ready` | public, unversioned — 503 when a required dependency is down |
+| `GET` | `/metrics` | public, unversioned, not enveloped |
 
 A permission in the Auth column means bearer **plus** that permission; `rbac:admin`
 satisfies every route marked `rbac:read`. See [Authorization](#authorization-rbac).
 
 Full schemas and a live console at [`/docs`](#api-documentation).
+
+### Versioning
+
+Routes live under `/api/v1`. The version is in the **path**, not a header,
+because that is where it is visible — in an access log, a curl pasted into a
+bug report, a Grafana label and the Swagger URL. A header carries the same
+information where nobody looks, and makes "which version broke?" unanswerable
+from logs.
+
+`API_DEFAULT_VERSION` sets what an undecorated controller serves. Introducing
+v2 for one route is `@Version('2')` on that handler; everything else keeps
+answering on v1 from the same code. There is no unversioned alias — two live
+spellings of one route means clients pin neither, and the day v2 lands they all
+break at once.
+
+`/health`, `/health/ready` and `/metrics` are `VERSION_NEUTRAL`. A probe is
+configured once in a deployment manifest and must not have to follow an API
+version.
+
+### Rate limiting
+
+A fixed window per client IP, counted in Redis so the budget is shared across
+replicas — an in-memory limiter with two replicas behind a balancer is a limit
+of twice what it says, and it resets on every deploy.
+
+| Scope | Default | Applies to |
+|---|---|---|
+| `global` | 100 / 60s | every route without a tighter setting |
+| `auth` | 10 / 60s | `POST /api/v1/auth/login`, `/auth/refresh`, `POST /api/v1/users` |
+
+The buckets are separate, so a password-guessing loop cannot lock the rest of
+the API out. Every response carries `X-RateLimit-Limit`, `-Remaining` and
+`-Reset`; a rejection is `429 RATE_LIMITED` with `Retry-After`.
+
+Three deliberate choices:
+
+- **It runs before authentication.** `RateLimitGuard` is registered in
+  `platform/http/http.module.ts`, which `app.module.ts` imports *above*
+  `AuthModule` — Nest runs global guards in registration order. A flood is
+  rejected before it costs a signature verification and a Redis lookup, and
+  login, which has no token yet, is covered at all.
+- **It fails open.** If Redis is unreachable the request is allowed and a
+  warning is logged. A limiter outage must not become an outage; this is a
+  safeguard, not an authorization decision.
+- **`X-Forwarded-For` is ignored** unless `TRUST_PROXY=true`. The header is
+  caller-supplied: trusting it by default hands every client an unlimited
+  supply of fresh budgets.
+
+Opt out with `@NoRateLimit()` (the probes do), or set a route-specific budget
+with `@RateLimit({ scope: 'export', limit: 1, windowSeconds: 3600 })`.
+
+### Probes
+
+| | |
+|---|---|
+| `GET /health` | Liveness. Static, touches nothing. |
+| `GET /health/ready` | Readiness. Checks Postgres, Redis and NATS; `503` when a *required* one is down. |
+
+They are different questions. Liveness asks "is the event loop turning?" and
+the right response to a failure is a restart. Readiness asks "can this instance
+serve?" and the right response is to stop sending it traffic. Wiring one probe
+to both is how a Postgres blip becomes a cluster-wide restart loop.
+
+Not every dependency votes:
+
+| Dependency | Required | Why |
+|---|---|---|
+| Postgres | yes | nothing works without it |
+| Redis | yes | `JwtAuthGuard` checks the revocation list on every authenticated request, and that lookup throws when Redis is gone — the outage is a 500 on every protected route, whatever the word "cache" suggests |
+| NATS | **no** | the outbox exists so the API keeps accepting writes while the broker is away. Failing readiness would pull every replica out of rotation for a fault the design already absorbs, turning a delayed projection into a full outage. It reports `degraded` instead |
 
 ---
 
@@ -339,11 +418,11 @@ Full schemas and a live console at [`/docs`](#api-documentation).
 
 ### Calling a protected route from the UI
 
-Everything except registration, login, refresh and the health probe shows a
-padlock. To unlock them:
+Everything except registration, login, refresh, the two health probes and the
+metrics scrape shows a padlock. To unlock them:
 
-1. **`POST /api/users`** — register. Public, so no token needed.
-2. **`POST /api/auth/login`** — copy `data.accessToken` from the response.
+1. **`POST /api/v1/users`** — register. Public, so no token needed.
+2. **`POST /api/v1/auth/login`** — copy `data.accessToken` from the response.
 3. Click **Authorize** (top right), paste the token, **Close**.
 4. Every padlocked route now works from *Try it out*.
 
@@ -363,7 +442,7 @@ all when disabled — the switch is configuration, not an `if` in `main.ts`.
 
 ### The spec matches what is sent
 
-A `201` on `POST /api/users` documents `{ success, data: UserResponseDto }`, not
+A `201` on `POST /api/v1/users` documents `{ success, data: UserResponseDto }`, not
 a bare `UserResponseDto`. That distinction is the whole point: a spec describing
 the inner object generates clients that never unwrap `data` and fail on the
 first call.
@@ -376,6 +455,11 @@ controller with a `@Public()` route would claim registration needs a token.
 Four tests hold this true: every 2xx JSON response must wrap the envelope; the
 documented fields must equal the keys of a real `201`; and of a real `409`; and
 the declared security must match the routes the guard actually leaves open.
+
+`/metrics` is the one documented exception to the envelope, and the test that
+enforces it skips it correctly: the Prometheus exposition format is a fixed
+text contract, and wrapping it in `{ success, data }` would make it unreadable
+to every scraper.
 
 ---
 
@@ -421,6 +505,80 @@ In-process `@EventsHandler` subscribers, for work that is worthless if it arrive
 | `InvalidateGrantsOnRoleChange` | `rbac.role.permission-granted` · `.permission-revoked` | expands the role to its holders and evicts each |
 
 Both are in-process rather than durable on purpose: the cache is Redis, so one replica's `DEL` serves every replica, and the only failure mode — a lost eviction — is already bounded by `RBAC_CACHE_TTL_SECONDS`. Adding at-least-once machinery would buy nothing.
+
+---
+
+## Observability
+
+Three pieces, all open formats, none of them a vendor SDK the application has
+to import:
+
+| | |
+|---|---|
+| **Metrics** | `GET /metrics` in the Prometheus text format — HTTP rate/latency by route, event throughput, outbox depth, consumer lag, rate-limit rejections, plus the default process metrics |
+| **Logs** | JSON on stdout, one object per line, with `level`, `context`, `message` and `correlationId`. One line per request, plus whatever the handlers log |
+| **Correlation id** | `X-Request-Id` on every response, and in the body of every error |
+
+```bash
+make obs-up     # Prometheus + Loki + Promtail + Grafana on top of the dev stack
+```
+
+- Grafana — `http://localhost:3001` (`admin` / `admin`), with the **nest-kit — API and messaging** dashboard already provisioned
+- Prometheus — `http://localhost:9090`, scraping `api:3000/metrics` every 15s, with the alert rules in `docker/observability/alerts.yml`
+- Loki — `http://localhost:3100`, fed by Promtail from the containers' stdout
+
+### The correlation id is what joins them
+
+Metrics answer *how much and how bad*; logs answer *what exactly broke*. The id
+is what turns two dashboards into one investigation:
+
+1. An alert fires on `http_requests_total{status_code=~"5.."}`.
+2. The Errors panel at the bottom of the dashboard is Loki, filtered to
+   `{service="api", level="error"}`. Take a `correlationId` from any line.
+3. `{service="api"} | json | correlationId="019fd1…"` returns that one request
+   end to end, across every module it touched.
+4. The same id is in the error body the client saw, so a user can paste it into
+   a bug report and land on step 3 directly.
+
+It is carried in `AsyncLocalStorage`, not passed as an argument. A logger
+parameter on every use case, repository and handler would put a transport
+concern into `application/` — exactly what the dependency rule forbids — and
+would mean touching every signature to add one field.
+
+`correlationId` is deliberately **not** a Loki label (and no metric is labelled
+by URL or user): one label value per request multiplies the index by the
+request rate. It stays a parsed field, which is exactly as fast for the one
+request you are chasing. Promtail labels only `level` and `context`, and
+`http_requests_total` is labelled by route *pattern* — `/api/v1/users/:uuid`,
+never `/api/v1/users/019fd1…`.
+
+### Why no Sentry
+
+Prometheus and Loki cover both halves — the aggregate and the single failure —
+and self-host with no DSN, no SaaS account and no SDK in the dependency tree.
+What a hosted error tracker adds on top is issue grouping and dedup, release
+regression tracking, and alert-on-new-error-type. Those are real, and they are
+a deployment's decision rather than a starter's dependency: adding
+`@sentry/node` here would put a vendor in every consumer's tree for a feature
+half of them would rip out. Nothing stops you — initialise it in `main.ts`
+beside the logger.
+
+### What is instrumented, and where
+
+| Metric | Emitted by |
+|---|---|
+| `http_requests_total` · `http_request_duration_seconds` | `HttpMetricsMiddleware` — middleware, not an interceptor, so 404s and requests a guard rejects are counted too |
+| one log line per request (`HTTP` context) | `RequestLogMiddleware`. Probes are skipped: a liveness check every five seconds is 17k lines a day that say nothing, and they are already visible as metrics |
+| `events_published_total` | `OutboxRelay`, on broker acknowledgement |
+| `events_consumed_total{outcome}` · `event_handler_duration_seconds` | `DurableConsumerService`; `outcome` separates `ok`, `duplicate` and `failed`, because a climbing duplicate rate is a relay fault and a climbing failure rate is a handler fault |
+| `events_dlq_total` | `DurableConsumerService`, on dead-lettering |
+| `rate_limit_rejected_total{scope}` | `RateLimitGuard` |
+| `outbox_*` · `consumer_*` · `messaging_broker_reachable` | `MessagingMetricsCollector`, read at scrape time — the same numbers as `GET /api/v1/admin/messaging/status`, so what an operator can curl is also alertable |
+
+`prom-client` is confined to `platform/observability/metrics.service.ts`;
+everything else records through its typed methods. Metric names and label sets
+then live in one file, which is what stops two spellings of the same counter
+becoming two series that each show half the traffic.
 
 ---
 
@@ -578,6 +736,15 @@ Forbidden because it breaks the above: importing another context's internals (on
 | Seeding trigger | An explicit command | Booting must not write data: every replica raced to do the same write, and provisioning belongs in shell history where it can be audited | `onApplicationBootstrap` (what this replaced) |
 | Seed semantics | Additive — grants, never revokes | A deploy must not silently undo what an operator granted by hand; removing a permission belongs in a reviewed migration | Full reconciliation, catalogue as the only truth |
 | Seed safety | Host allowlist, `ALLOW_REMOTE_SEED` to override | `NODE_ENV` is whatever the shell last exported; the host is what is actually written to | `NODE_ENV !== 'production'` |
+| API versioning | URI, `/api/v1`, no unversioned alias | The version is then visible in an access log, a curl from a bug report and a dashboard label — "which version broke?" is answerable. Two live spellings of one route means clients pin neither and v2 breaks all of them at once | Header versioning; `/api/…` kept as a permanent alias |
+| Error tracking | Prometheus + Loki + Grafana, self-hosted | Metrics give the aggregate, structured logs give the individual stack trace, and the correlation id joins them. No DSN, no SaaS account, no SDK every consumer has to rip out | `@sentry/node` — its real additions (issue grouping, release regressions) are a deployment's decision, not a starter's dependency |
+| Metrics library | `prom-client`, imported in exactly one file | Metric names and label sets in one place. Named at the call site, two spellings of one counter become two series that each show half the traffic | Recording from anywhere; a hand-rolled exposition format |
+| HTTP instrumentation | Middleware, not an interceptor | An interceptor only runs for a matched route, so 404s and guard rejections — the traffic you actually investigate — would be missing from the counter | `NestInterceptor` |
+| Correlation id transport | `AsyncLocalStorage` | Reaches every existing log statement without changing one of them. A logger parameter on every use case would put a transport concern into `application/`, which §1 forbids | Threading a logger through use case signatures |
+| Rate limiter store | Redis fixed window, one Lua `eval` | Two replicas behind a balancer make an in-memory limit of 10 a limit of 20, and it resets on every deploy. One script keeps INCR + EXPIRE + TTL from interleaving and returns the reset for `Retry-After` | In-memory counters; separate INCR and EXPIRE round trips |
+| Rate limiter failure mode | Fails open | A limiter outage must not become an outage — this is a safeguard, not an authorization decision | Fail closed, on the grounds that it is "safer" |
+| Limiter guard position | `APP_GUARD` registered above `AuthModule` | Rejects a credential-less flood before it costs a signature verification and a Redis lookup, and covers login, which has no token to check. Pinned by an e2e test expecting 429 rather than 401 | Below the auth guard, or route-scoped |
+| Readiness dependencies | Postgres and Redis required; NATS advisory | The outbox exists so the API keeps accepting writes while the broker is away. Failing readiness there pulls every replica out of rotation for a fault the design already absorbs — a delayed projection becomes a full outage | All three required; NATS omitted from the probe entirely |
 
 ---
 
@@ -590,8 +757,9 @@ Forbidden because it breaks the above: importing another context's internals (on
 5. **Never add comments unless they explain a decision** the code cannot. Prefer explaining *why*, not *what*.
 6. **Commit messages explain the reasoning**, not the diff. Record defects found and why the fix is shaped that way.
 7. **Read `AGENTS.md` before changing architecture.** Where it and a comment disagree, `AGENTS.md` wins.
-8. **e2e tests need infrastructure**: `make db-up` then `make migrate-up`. They run `--runInBand` because they share one database, and any suite touching the JetStream stream must purge it like it truncates tables.
-9. **A new bounded context is cloned from `identity`** — it is the reference module.
+8. **e2e tests need infrastructure**: `make db-up` then `make migrate-up`. They run `--runInBand` because they share one database, and any suite touching the JetStream stream must purge it like it truncates tables. The rate limiter counts in Redis, which also outlives the process — a suite that exercises it must clear its `ratelimit:*` keys for the same reason.
+9. **A metric label is never unbounded.** Route patterns, not URLs; no uuids, user ids or correlation ids in a label — on a Prometheus series or a Loki stream. The same value belongs in the log *body*, where it costs nothing.
+10. **A new bounded context is cloned from `identity`** — it is the reference module.
 
 ---
 
@@ -620,7 +788,7 @@ Clone that shape rather than inventing one.
 2. **Domain first** — entity with behaviour, value objects, `errors.ts` as `AppError` factories, `events/`, and `ports/` as `abstract class`. No framework imports.
 3. **Application** — one file per use case, `*.command.ts` plus `*.handler.ts`. Wrap writes in `uow.withTransaction` and publish inside it.
 4. **Infrastructure** — `*.orm-entity.ts`, `*.mapper.ts`, `*-repository.ts` extending `TransactionalRepository`. The ORM entity never leaves this folder.
-5. **Presentation** — controller plus `dto/`. Routes are authenticated unless marked `@Public()`; add `@RequirePermissions('<context>:<action>')` where a route needs more than a caller, and create the permission so a role can hold it.
+5. **Presentation** — controller plus `dto/`. Routes are authenticated unless marked `@Public()`; add `@RequirePermissions('<context>:<action>')` where a route needs more than a caller, and create the permission so a role can hold it. A new controller needs no version decorator — it inherits `/api/v1` — and is rate limited by the global budget already; reach for `@AuthRateLimit()` only if it takes a credential.
 6. **Migration** — `make migrate-create NAME=X`, its own schema, `BIGSERIAL` + `uuid`, no cross-context foreign keys.
 7. **`index.ts`** exporting only the module, its ports, entities and events — never adapters or handlers.
 8. Register in `app.module.ts`, then `make check`.
@@ -645,6 +813,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | `make prod-migrate` / `prod-seed` | Same, inside the production stack |
 | `make keygen` | ES256 keypair into `certs/` |
 | `pnpm openapi:export [file]` | Write the OpenAPI document (default `openapi.json`) |
+| `make obs-up` / `obs-down` / `obs-logs` | Prometheus + Loki + Promtail + Grafana |
 | `make psql` / `make redis-cli` / `make nats-info` | Inspect infrastructure |
 | `make clean` | Remove containers, volumes and the built image |
 
@@ -689,7 +858,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | Consumer DLQ + config reconciliation on boot |
 | ✅ | Dead-letter admin API — inspect, replay, discard |
 | ✅ | Backlog and per-consumer lag via `GET /admin/messaging/status` |
-| ❌ | Prometheus scrape endpoint (belongs with observability) |
+| ✅ | Prometheus scrape endpoint — the same backlog as gauges, plus publish/consume/DLQ rates |
 
 ### Contexts
 
@@ -701,25 +870,27 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | `auth` — ES256, `typ` claim, refresh rotation with replay detection, Redis blacklist |
 | ✅ | Global auth guard, deny by default, `@Public()` opt-out |
 | ✅ | `rbac` — roles, permissions, audited assignments, cached grants with event-driven eviction |
-| ✅ | `@RequirePermissions()` / `@RequireRoles()`, enforced on `/api/admin/messaging` |
+| ✅ | `@RequirePermissions()` / `@RequireRoles()`, enforced on `/api/v1/admin/messaging` |
 
 ### Operations
 
 | | Item |
 |---|---|
-| 🚧 | Health — liveness only; no readiness probe for Postgres/NATS |
+| ✅ | Liveness *and* readiness — `/health/ready` checks Postgres, Redis and NATS, 503 on a required one |
 | ✅ | Redis — access-token blacklist, TTL bounded by the token's own expiry |
-| ❌ | Structured logging, metrics, Sentry (`platform/observability`) |
-| ❌ | Rate limiting |
+| ✅ | Structured JSON logging with a correlation id, `platform/observability` |
+| ✅ | Prometheus metrics at `/metrics`, plus a Grafana + Loki stack (`make obs-up`) and alert rules |
+| ✅ | Rate limiting — Redis fixed window, tighter budget on credential routes, fails open |
+| ✅ | API versioning — URI, `/api/v1`, probes and scrape version-neutral |
 | ❌ | Admin / back-office |
-| ❌ | API versioning |
+| ❌ | Alertmanager routing (rules exist; where a page goes is a deployment decision) |
 
 ### Testing
 
 | | Item |
 |---|---|
-| ✅ | 173 unit tests — domain, value objects, use cases, guards, seeders, transactions, serialisation |
-| ✅ | 100 e2e tests against live Postgres, Redis and NATS |
+| ✅ | 215 unit tests — domain, value objects, use cases, guards, limiter, logger, health, metrics, seeders, transactions, serialisation |
+| ✅ | 119 e2e tests against live Postgres, Redis and NATS |
 | ✅ | Shared `configureApp()` so tests cannot drift from production wiring |
 | ❌ | Load / soak testing |
 | ❌ | Coverage thresholds enforced in CI |
@@ -730,13 +901,21 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 **`GET /api` returns 404.** Expected. `/api` is the global *prefix*, not a route — nothing is mounted at the bare prefix, and there is no root route either. The well-formed error envelope you get back is the filter working. Go to **`/docs`**.
 
-**A route 404s in the browser but works in `curl`.** A browser only issues `GET`. `POST /api/auth/login` is POST-only, and Nest matches method and path together, so a `GET` is simply an unmatched route. Use `/docs` and its *Try it out*, or `curl -X POST`.
+**A route 404s in the browser but works in `curl`.** A browser only issues `GET`. `POST /api/v1/auth/login` is POST-only, and Nest matches method and path together, so a `GET` is simply an unmatched route. Use `/docs` and its *Try it out*, or `curl -X POST`.
+
+**`404` on a path that exists, e.g. `/api/users`.** Routes are versioned: it is `/api/v1/users`. There is no unversioned alias on purpose — see [Versioning](#versioning). `/health` and `/metrics` are the exception and take no version.
 
 **`401` on every route.** Expected — access is denied by default. Get a token (see [Authentication](#authentication)) or mark the route `@Public()`.
 
-**`403 FORBIDDEN` with a perfectly good token.** The token authenticated you; the route wants a permission you do not hold. `GET /api/rbac/me/grants` shows what you have. If it comes back empty on a fresh database, nobody has been made an admin yet — set `SEED_SUPERADMIN_EMAIL`/`_PASSWORD` and run `make seed`.
+**`429 RATE_LIMITED` while developing.** The limiter counts per client IP in Redis, and a hot reload loop or a seeded test script burns the budget fast. `X-RateLimit-Reset` says how long until the window rolls; raise `RATE_LIMIT_LIMIT` / `RATE_LIMIT_AUTH_LIMIT`, or set `RATE_LIMIT_ENABLED=false` locally. Counters live in Redis, so `make redis-cli` then `DEL` the `ratelimit:*` keys clears it immediately.
 
-**A route 403s for everyone, including admin.** It requires a permission that is not in the catalogue, so no role can hold it. Compare the string in `@RequirePermissions()` against `GET /api/rbac/permissions`; a permission has to be created before a route can ask for it.
+**`/health/ready` returns `degraded`.** A non-required dependency is down — in practice NATS. The API keeps serving and events queue in the outbox; check `messaging_broker_reachable` and `GET /api/v1/admin/messaging/status`. It only returns 503 when Postgres or Redis is down.
+
+**Grafana shows "No data".** Check `http://localhost:9090/targets` — the scrape target is `api:3000`, which resolves only when the API runs *in* the compose network. Running the app on the host with `pnpm start:dev` means Prometheus cannot reach it: use `make dev` (or add a `host.docker.internal` target). Also confirm `METRICS_ENABLED` is not `false`.
+
+**`403 FORBIDDEN` with a perfectly good token.** The token authenticated you; the route wants a permission you do not hold. `GET /api/v1/rbac/me/grants` shows what you have. If it comes back empty on a fresh database, nobody has been made an admin yet — set `SEED_SUPERADMIN_EMAIL`/`_PASSWORD` and run `make seed`.
+
+**A route 403s for everyone, including admin.** It requires a permission that is not in the catalogue, so no role can hold it. Compare the string in `@RequirePermissions()` against `GET /api/v1/rbac/permissions`; a permission has to be created before a route can ask for it.
 
 **Boot fails reading `certs/private.pem`.** Run `make keygen`. The keypair is gitignored, so every clone and every CI run needs its own.
 
@@ -748,7 +927,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 
 **`SyntaxError: Unexpected token 'export'` from jose.** It is ESM-only and jest's runtime is CJS. Both jest configs carry `transformIgnorePatterns: ["node_modules/(?!.*jose)"]`; the naive `(?!jose)` fails because pnpm nests packages under `.pnpm/`.
 
-**Events never reach a consumer.** Start at `GET /api/admin/messaging/status`. A rising `outbox.pending` with a growing `oldestPendingAgeSeconds` means the relay is not draining (is NATS up? is `OUTBOX_ENABLED` true?). `outbox.deadLettered` above zero means publishing failed `OUTBOX_MAX_ATTEMPTS` times — list them at `outbox/dead-lettered` to see `lastError`, then `POST outbox/replay`. If the outbox is clear but nothing reacts, check the consumer: `present: false` means it failed to start, rising `redelivered` without `pending` falling means the handler keeps throwing, and `deadLetters` above zero means it gave up — inspect at `dead-letters`.
+**Events never reach a consumer.** Start at `GET /api/v1/admin/messaging/status`. A rising `outbox.pending` with a growing `oldestPendingAgeSeconds` means the relay is not draining (is NATS up? is `OUTBOX_ENABLED` true?). `outbox.deadLettered` above zero means publishing failed `OUTBOX_MAX_ATTEMPTS` times — list them at `outbox/dead-lettered` to see `lastError`, then `POST outbox/replay`. If the outbox is clear but nothing reacts, check the consumer: `present: false` means it failed to start, rising `redelivered` without `pending` falling means the handler keeps throwing, and `deadLetters` above zero means it gave up — inspect at `dead-letters`.
 
 **"consumer already exists" at boot.** A durable consumer's configuration changed. It is reconciled automatically; if it still fails the consumer is skipped and logged rather than taking the API down.
 

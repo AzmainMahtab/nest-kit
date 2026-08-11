@@ -56,6 +56,10 @@ export class AppError extends Error {
     return new AppError(ErrorKind.Forbidden, code, message);
   }
 
+  static rateLimited(code: string, message: string): AppError {
+    return new AppError(ErrorKind.RateLimited, code, message);
+  }
+
   static validation(field: string, message: string, code = 'VALIDATION_FAILED'): AppError {
     return new AppError(ErrorKind.Invalid, code, 'validation failed', [{ field, code, message }]);
   }

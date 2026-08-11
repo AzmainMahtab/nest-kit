@@ -4,6 +4,9 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   API_PREFIX: z.string().default('api'),
+  // URI versioning: every route under the prefix is served at /<prefix>/v<n>.
+  // A route pinned with @Version('2') keeps working while this default moves.
+  API_DEFAULT_VERSION: z.string().regex(/^\d+$/).default('1'),
   CORS_ORIGINS: z.string().default(''),
 
   POSTGRES_HOST: z.string().default('localhost'),
@@ -64,6 +67,41 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+
+  // Structured logging. `json` is what Loki indexes; `pretty` is for a human
+  // reading a terminal. Defaults follow the environment rather than forcing a
+  // choice that is wrong in one of the two.
+  LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
+  LOG_FORMAT: z.enum(['json', 'pretty']).optional(),
+
+  METRICS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+
+  // Fixed window per client IP. The default is generous enough that a normal
+  // UI never sees it and low enough that a scripted loop does.
+  RATE_LIMIT_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(100),
+  RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  // Credential endpoints get their own budget: the global one is far too
+  // generous for password guessing.
+  RATE_LIMIT_AUTH_LIMIT: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_AUTH_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  // Behind a load balancer the socket address is the balancer. Only enable
+  // this when something you control sets X-Forwarded-For, or a client can
+  // forge the header and get a fresh budget per request.
+  TRUST_PROXY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  // A readiness check is on the critical path of every deploy: it must fail
+  // fast rather than hang while Kubernetes waits.
+  HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
 
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),

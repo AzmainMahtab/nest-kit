@@ -55,7 +55,7 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
     await dataSource.query('TRUNCATE rbac.user_roles');
 
     const registered = await http()
-      .post('/api/users')
+      .post('/api/v1/users')
       .send({ email: 'ada@example.com', password: PASSWORD })
       .expect(201);
 
@@ -70,7 +70,7 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
     );
 
     const login = await http()
-      .post('/api/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email: 'ada@example.com', password: PASSWORD })
       .expect(200);
     auth = `Bearer ${ok<{ accessToken: string }>(login).accessToken}`;
@@ -81,14 +81,14 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
   });
 
   it('is not reachable without authentication', async () => {
-    await http().get('/api/admin/messaging/status').expect(401);
-    await http().post('/api/admin/messaging/outbox/replay').send({}).expect(401);
+    await http().get('/api/v1/admin/messaging/status').expect(401);
+    await http().post('/api/v1/admin/messaging/outbox/replay').send({}).expect(401);
   });
 
   it('reports the outbox backlog including how long the oldest row has waited', async () => {
     // The relay is off in tests, so registration leaves rows pending.
     const status = ok<MessagingStatus>(
-      await http().get('/api/admin/messaging/status').set('Authorization', auth).expect(200),
+      await http().get('/api/v1/admin/messaging/status').set('Authorization', auth).expect(200),
     );
 
     expect(status.brokerReachable).toBe(true);
@@ -100,7 +100,7 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
 
   it('reports per-consumer lag and which subjects each covers', async () => {
     const status = ok<MessagingStatus>(
-      await http().get('/api/admin/messaging/status').set('Authorization', auth).expect(200),
+      await http().get('/api/v1/admin/messaging/status').set('Authorization', auth).expect(200),
     );
 
     const welcome = status.consumers.find((c) => c.name === 'notification_welcome');
@@ -121,7 +121,7 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
 
     const rows = ok<DeadLetteredRow[]>(
       await http()
-        .get('/api/admin/messaging/outbox/dead-lettered')
+        .get('/api/v1/admin/messaging/outbox/dead-lettered')
         .set('Authorization', auth)
         .expect(200),
     );
@@ -141,7 +141,7 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
 
     const result = ok<{ replayed: number; drained: number }>(
       await http()
-        .post('/api/admin/messaging/outbox/replay')
+        .post('/api/v1/admin/messaging/outbox/replay')
         .set('Authorization', auth)
         .send({ ids: [row!.id] })
         .expect(200),
@@ -159,7 +159,7 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
 
   it('rejects a non-numeric outbox id rather than passing it to SQL', async () => {
     await http()
-      .post('/api/admin/messaging/outbox/replay')
+      .post('/api/v1/admin/messaging/outbox/replay')
       .set('Authorization', auth)
       .send({ ids: ['1; DROP TABLE outbox.events'] })
       .expect(400);
@@ -181,13 +181,16 @@ describe('Messaging admin (e2e — requires Postgres, Redis, NATS + `make migrat
     );
 
     const listed = ok<{ consumerName: string; error: string }[]>(
-      await http().get('/api/admin/messaging/dead-letters').set('Authorization', auth).expect(200),
+      await http()
+        .get('/api/v1/admin/messaging/dead-letters')
+        .set('Authorization', auth)
+        .expect(200),
     );
     expect(listed).toHaveLength(1);
     expect(listed[0]?.error).toBe('handler exploded');
 
     await http()
-      .post('/api/admin/messaging/dead-letters/discard')
+      .post('/api/v1/admin/messaging/dead-letters/discard')
       .set('Authorization', auth)
       .send({
         consumerName: 'notification_welcome',

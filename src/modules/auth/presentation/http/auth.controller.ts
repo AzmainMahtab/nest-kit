@@ -5,6 +5,7 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { CurrentUser } from '../../../../platform/http/decorators/current-user.decorator';
 import { ApiEnvelope, ApiFailure, ApiValidationFailure } from '../../../../platform/http/swagger';
 import { Public } from '../../../../platform/http/decorators/public.decorator';
+import { AuthRateLimit } from '../../../../platform/http/decorators/rate-limit.decorator';
 import type { CurrentUser as CurrentUserType } from '../../../../shared/auth-context';
 import { LoginCommand, TokenPair } from '../../application/commands/login.command';
 import { LogoutCommand } from '../../application/commands/logout.command';
@@ -17,11 +18,13 @@ export class AuthController {
   constructor(private readonly commands: CommandBus) {}
 
   @Public()
+  @AuthRateLimit()
   @Post('login')
   @HttpCode(200)
   @ApiOperation({ summary: 'Exchange credentials for a token pair' })
   @ApiEnvelope(TokenPairDto, { status: 200, description: 'A fresh token pair' })
   @ApiValidationFailure()
+  @ApiFailure(429, 'RATE_LIMITED', 'Tighter budget than the rest of the API')
   @ApiFailure(
     401,
     'INVALID_CREDENTIALS',
@@ -36,10 +39,12 @@ export class AuthController {
   }
 
   @Public()
+  @AuthRateLimit()
   @Post('refresh')
   @HttpCode(200)
   @ApiOperation({ summary: 'Rotate a refresh token for a new pair' })
   @ApiEnvelope(TokenPairDto, { status: 200, description: 'A rotated token pair' })
+  @ApiFailure(429, 'RATE_LIMITED', 'Tighter budget than the rest of the API')
   @ApiFailure(
     401,
     'REFRESH_TOKEN_REPLAYED',

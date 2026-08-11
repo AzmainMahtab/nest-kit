@@ -12,18 +12,27 @@ import { CryptoModule } from './platform/crypto/crypto.module';
 import { DatabaseModule } from './platform/database';
 import { EventBusModule } from './platform/eventbus/eventbus.module';
 import { HealthModule } from './platform/health/health.module';
+import { HttpModule } from './platform/http/http.module';
 import { MessagingModule } from './platform/messaging/messaging.module';
+import { ObservabilityModule } from './platform/observability';
 import { OutboxModule } from './platform/outbox';
 
 @Module({
   imports: [
     ConfigModule,
+    // Before everything it instruments, so the correlation id is set and the
+    // request is timed even when a later module's middleware short-circuits.
+    ObservabilityModule,
     MessagingModule,
     OutboxModule,
     DatabaseModule,
     CryptoModule,
     CacheModule,
     EventBusModule,
+    // Registers the rate limiter as a global guard. Must stay above
+    // AuthModule — Nest runs global guards in registration order, and the
+    // limiter has to see a request before JwtAuthGuard rejects it.
+    HttpModule,
     HealthModule,
     IdentityModule,
     AuthModule,

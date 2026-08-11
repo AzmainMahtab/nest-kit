@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: nest-kit
+    orgId: 1
+    folder: nest-kit
+    type: file
+    disableDeletion: false
+    # Edits made in the UI are overwritten from the file. That is deliberate:
+    # the dashboard is versioned with the code that emits the metrics, so a
+    # renamed metric and its panel change in the same commit.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

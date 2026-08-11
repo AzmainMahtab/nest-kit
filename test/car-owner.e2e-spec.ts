@@ -47,14 +47,14 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
   const http = () => request(app.getHttpServer());
 
   const registerUser = async (email: string): Promise<string> => {
-    const res = await http().post('/api/users').send({ email, password: PASSWORD }).expect(201);
+    const res = await http().post('/api/v1/users').send({ email, password: PASSWORD }).expect(201);
     return ok<UserBody>(res).uuid;
   };
 
   const registerOwner = async (userUuid: string, address = '12 Cedar Road, Leeds') =>
     ok<OwnerBody>(
       await http()
-        .post('/api/owners')
+        .post('/api/v1/owners')
         .set('Authorization', auth)
         .send({ userUuid, address, dateOfBirth: '1990-04-12' })
         .expect(201),
@@ -63,7 +63,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
   const registerCar = async (ownerUuid: string, licensePlate: string, amount = '18500.00') =>
     ok<CarBody>(
       await http()
-        .post('/api/cars')
+        .post('/api/v1/cars')
         .set('Authorization', auth)
         .send({
           ownerUuid,
@@ -119,11 +119,11 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
     await dataSource.query('TRUNCATE notification.notifications RESTART IDENTITY');
 
     await http()
-      .post('/api/users')
+      .post('/api/v1/users')
       .send({ email: 'operator@example.com', password: PASSWORD })
       .expect(201);
     const login = await http()
-      .post('/api/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email: 'operator@example.com', password: PASSWORD })
       .expect(200);
     auth = `Bearer ${ok<{ accessToken: string }>(login).accessToken}`;
@@ -145,7 +145,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
 
     it('refuses a user that does not exist, without a foreign key', async () => {
       const res = await http()
-        .post('/api/owners')
+        .post('/api/v1/owners')
         .set('Authorization', auth)
         .send({
           // Well-formed but unknown. A nil-style uuid would be rejected by
@@ -165,7 +165,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       await registerOwner(userUuid);
 
       const res = await http()
-        .post('/api/owners')
+        .post('/api/v1/owners')
         .set('Authorization', auth)
         .send({ userUuid, address: 'somewhere else', dateOfBirth: '1990-04-12' })
         .expect(409);
@@ -177,7 +177,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       const userUuid = await registerUser('ada@example.com');
 
       const res = await http()
-        .post('/api/owners')
+        .post('/api/v1/owners')
         .set('Authorization', auth)
         .send({ userUuid, address: '12 Cedar Road', dateOfBirth: '2015-01-01' })
         .expect(400);
@@ -198,7 +198,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
 
       // And it survives the round trip through NUMERIC without becoming a float.
       const fetched = ok<CarBody>(
-        await http().get(`/api/cars/${car.uuid}`).set('Authorization', auth).expect(200),
+        await http().get(`/api/v1/cars/${car.uuid}`).set('Authorization', auth).expect(200),
       );
       expect(fetched.amount).toBe('18500.50');
     });
@@ -208,7 +208,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       await registerCar(owner.uuid, 'AB12CD');
 
       const res = await http()
-        .post('/api/cars')
+        .post('/api/v1/cars')
         .set('Authorization', auth)
         .send({
           ownerUuid: owner.uuid,
@@ -228,13 +228,13 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
     it('refuses to register against an inactive owner', async () => {
       const owner = await registerOwner(await registerUser('ada@example.com'));
       await http()
-        .patch(`/api/owners/${owner.uuid}/deactivate`)
+        .patch(`/api/v1/owners/${owner.uuid}/deactivate`)
         .set('Authorization', auth)
         .send({ reason: 'test' })
         .expect(200);
 
       const res = await http()
-        .post('/api/cars')
+        .post('/api/v1/cars')
         .set('Authorization', auth)
         .send({
           ownerUuid: owner.uuid,
@@ -261,7 +261,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
 
       const moved = ok<CarBody>(
         await http()
-          .patch(`/api/cars/${car.uuid}/transfer`)
+          .patch(`/api/v1/cars/${car.uuid}/transfer`)
           .set('Authorization', auth)
           .send({ toOwnerUuid: second.uuid })
           .expect(200),
@@ -269,7 +269,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       expect(moved.ownerUuid).toBe(second.uuid);
 
       const res = await http()
-        .patch(`/api/cars/${car.uuid}/transfer`)
+        .patch(`/api/v1/cars/${car.uuid}/transfer`)
         .set('Authorization', auth)
         .send({ toOwnerUuid: second.uuid })
         .expect(400);
@@ -288,7 +288,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
 
       const page = ok<{ total: number; items: CarBody[] }>(
         await http()
-          .get(`/api/cars?ownerUuid=${first.uuid}`)
+          .get(`/api/v1/cars?ownerUuid=${first.uuid}`)
           .set('Authorization', auth)
           .expect(200),
       );
@@ -302,13 +302,13 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       const car = await registerCar(owner.uuid, 'AB12CD');
 
       await http()
-        .patch(`/api/cars/${car.uuid}/retire`)
+        .patch(`/api/v1/cars/${car.uuid}/retire`)
         .set('Authorization', auth)
         .send({})
         .expect(200);
 
       const res = await http()
-        .patch(`/api/cars/${car.uuid}/price`)
+        .patch(`/api/v1/cars/${car.uuid}/price`)
         .set('Authorization', auth)
         .send({ amount: '1.00', currency: 'USD' })
         .expect(409);
@@ -323,7 +323,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       await registerCar(owner.uuid, 'BB22BB');
 
       await http()
-        .patch(`/api/owners/${owner.uuid}/deactivate`)
+        .patch(`/api/v1/owners/${owner.uuid}/deactivate`)
         .set('Authorization', auth)
         .send({ reason: 'fraud review' })
         .expect(200);
@@ -341,7 +341,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       await registerCar(owner.uuid, 'AA11AA');
 
       // Only identity is touched. Nothing here mentions owner or car.
-      await http().delete(`/api/users/${userUuid}`).set('Authorization', auth).expect(204);
+      await http().delete(`/api/v1/users/${userUuid}`).set('Authorization', auth).expect(204);
 
       // Hop one: the owner context reacts and publishes its own event.
       await relay.tick();
@@ -366,7 +366,7 @@ describe('Owner + Car (e2e — requires Postgres, Redis, NATS + `make migrate-up
       const owner = await registerOwner(await registerUser('ada@example.com'));
       await registerCar(owner.uuid, 'AA11AA');
       await http()
-        .patch(`/api/owners/${owner.uuid}/deactivate`)
+        .patch(`/api/v1/owners/${owner.uuid}/deactivate`)
         .set('Authorization', auth)
         .send({})
         .expect(200);

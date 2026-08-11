@@ -335,6 +335,8 @@ Nested `withTransaction` calls join the transaction in progress rather than open
 |---|---|
 | Envelope | `ResponseEnvelope<T>` via a global interceptor — fixed external contract, do not rename fields |
 | Errors | `AppErrorFilter` — the only error path |
+| Versioning | URI, `/api/v1/…`, `defaultVersion` from config. A new controller needs no decorator; a route that must diverge gets `@Version('2')`. Probes and `/metrics` are `VERSION_NEUTRAL` and must stay that way |
+| Rate limiting | Global `RateLimitGuard`. `@AuthRateLimit()` on anything that takes a credential, `@NoRateLimit()` on probes, `@RateLimit({...})` for a route whose cost is unlike the rest |
 | DTOs | `class-validator` classes in `presentation/http/dto/`. Boundary only — a DTO never reaches `application/` or `domain/` |
 | Commands | Plain classes in `application/commands/`. No decorators, no validation |
 | Controllers | Decode → build command/query → `commandBus.execute()` → map result. No business logic, no repository access |
@@ -346,6 +348,45 @@ Nested `withTransaction` calls join the transaction in progress rather than open
 | CORS | Explicit origin allowlist from config. Never `*` with credentials |
 | Config | `platform/config` only. Direct `process.env` outside it is a lint error |
 | Money / decimals | Never `number`. Use a decimal string end-to-end; TypeORM `numeric` already returns `string` — do not "fix" that with `parseFloat` |
+
+---
+
+## 9a. Operations
+
+### Guard order is composition order
+
+`RateLimitGuard` is an `APP_GUARD` registered by `platform/http/http.module.ts`, and **`app.module.ts` must import that module above `AuthModule`**. Nest runs global guards in registration order, so this is what makes the limiter run before `JwtAuthGuard`:
+
+- a credential-less flood is rejected before it costs a signature verification and a Redis lookup;
+- login and registration, which have no token, are covered at all.
+
+`operations.e2e-spec.ts` pins the order by hammering a protected route with no credentials and expecting `429`, not `401`. If you reorder the imports, that test fails — that is its job.
+
+### The limiter fails open
+
+A Redis error allows the request and logs a warning. A limiter outage must not become an outage; this is a safeguard, not an authorization decision. Do not "fix" it into failing closed.
+
+Counting is one Lua `eval` (INCR, conditional EXPIRE, TTL). Do not split it into separate commands: two requests can both see a count of 1 and both reset the expiry, sliding the window forward forever under load.
+
+`X-Forwarded-For` is only believed when `TRUST_PROXY=true`. It is caller-supplied — trusting it by default gives every client an unlimited supply of fresh budgets.
+
+### Liveness and readiness are different questions
+
+`/health` is static and touches nothing: it answers "is the event loop turning?", and a failure should cause a restart. `/health/ready` checks the dependencies: it answers "can this instance serve?", and a failure should stop traffic. Never wire one probe to both — a Postgres blip then becomes a cluster-wide restart loop.
+
+Postgres and Redis are `required`; NATS is not. The outbox exists so the API keeps accepting writes while the broker is away, so a broker outage reports `degraded` and still returns 200. Redis *is* required despite being "a cache": `JwtAuthGuard` reads the revocation list on every authenticated request and that lookup throws when Redis is gone.
+
+Every probe is bounded by `HEALTH_CHECK_TIMEOUT_MS`. A hung dependency must fail the check, not hang it — an orchestrator waiting on a probe keeps sending traffic to an instance that cannot serve.
+
+### Observability
+
+- **`prom-client` is imported in exactly one file** — `platform/observability/metrics.service.ts`. Record through its typed methods. Naming a counter at its call site is how two spellings of one metric become two series that each show half the traffic.
+- **Labels stay low cardinality.** Route *patterns*, never URLs; never a user id, a uuid or a correlation id. One series per request is how a Prometheus instance runs out of memory. The same rule applies to Loki labels in `docker/observability/promtail.yml`.
+- **HTTP metrics are middleware, not an interceptor.** An interceptor only runs for a matched route, so 404s and guard rejections — exactly the traffic you investigate — would be missing.
+- **The correlation id travels in `AsyncLocalStorage`**, set by `CorrelationIdMiddleware` and read by `StructuredLogger`. Do not add a logger parameter to use cases to carry it: that puts a transport concern into `application/` and breaks §2.
+- **An inbound `X-Request-Id` is validated before use** (charset and length). It is written verbatim into a JSON log line and a response header; unchecked, it is a log-injection primitive.
+- **A module publishes its own gauges.** `MessagingMetricsCollector` lives in `messaging/`, not in `observability/`, and registers with `metrics.beforeCollect(...)` so values are read at scrape time. The dependency runs one way: messaging knows how to describe itself, observability knows nothing about brokers.
+- **Log JSON in production.** `LOG_FORMAT` defaults to `pretty` outside production and `json` in it. A collector indexes fields, not sentences.
 
 ---
 

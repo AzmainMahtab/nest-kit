@@ -11,9 +11,18 @@ Modular monolith: Clean Architecture, DDD and CQRS, sliced by bounded context.
 failure is \`{ "success": false, "error": { "code", "message", "details" }, "path", "timestamp" }\`.
 Match on \`error.code\` — it is stable. The message is for humans and may change.
 
-**Access is denied by default.** Only registration, login, refresh and the
-health probe are public. Everything else needs a bearer token: call
-\`POST /api/auth/login\`, then paste the \`accessToken\` into **Authorize** above.
+**Access is denied by default.** Only registration, login, refresh, the health
+probes and the metrics scrape are public. Everything else needs a bearer token:
+call \`POST /api/v1/auth/login\`, then paste the \`accessToken\` into
+**Authorize** above.
+
+**Routes are versioned in the path** — \`/api/v1/…\`. \`/health\`, \`/health/ready\`
+and \`/metrics\` are deliberately outside both the prefix and the version, so a
+deployment manifest never has to follow an API version.
+
+**Every route is rate limited** per client IP, and credential endpoints
+(register, login, refresh) get a tighter budget. Responses carry
+\`X-RateLimit-Remaining\`; a rejection is \`429 RATE_LIMITED\` with \`Retry-After\`.
 `.trim();
 
 export function buildOpenApiDocument(app: INestApplication, config: AppConfig): OpenAPIObject {
@@ -31,7 +40,8 @@ export function buildOpenApiDocument(app: INestApplication, config: AppConfig): 
     .addTag('Owners', 'Car owners, linked to a user')
     .addTag('Cars', 'Cars, linked to an owner')
     .addTag('Messaging admin', 'Outbox backlog, consumer lag, dead letters')
-    .addTag('Health', 'Liveness probe, outside the API prefix');
+    .addTag('Health', 'Liveness and readiness probes, outside the API prefix')
+    .addTag('Observability', 'Prometheus scrape endpoint');
 
   return SwaggerModule.createDocument(app, builder.build(), {
     // Referenced only through allOf in the response decorators, so Nest cannot

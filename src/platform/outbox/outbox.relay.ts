@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } fro
 
 import { MessagePublisher } from '../../shared/application';
 import { AppConfig } from '../config';
+import { MetricsService } from '../observability/metrics.service';
 import { toMessage } from './event-serializer';
 import { OutboxRepository, OutboxRow } from './outbox.repository';
 
@@ -24,6 +25,7 @@ export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdow
     private readonly outbox: OutboxRepository,
     private readonly publisher: MessagePublisher,
     private readonly config: AppConfig,
+    private readonly metrics: MetricsService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -82,6 +84,7 @@ export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdow
           row.idempotency_key,
         );
         published.push(row.id);
+        this.metrics.eventPublished(row.name);
       } catch (error) {
         const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
         await this.outbox.recordFailure(row.id, message, maxAttempts);

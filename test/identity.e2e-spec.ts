@@ -39,12 +39,13 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
   let dataSource: DataSource;
 
   const http = () => request(app.getHttpServer());
-  const register = (email: string) => http().post('/api/users').send({ email, password: PASSWORD });
+  const register = (email: string) =>
+    http().post('/api/v1/users').send({ email, password: PASSWORD });
 
   /** Registration is public; every other route needs a bearer token. */
   const tokenFor = async (email: string): Promise<string> => {
     const res = await http()
-      .post('/api/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email, password: PASSWORD })
       .expect(200);
     return `Bearer ${ok<{ accessToken: string }>(res).accessToken}`;
@@ -92,7 +93,7 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
 
   it('reports validation failures through the same envelope', async () => {
     const response = await http()
-      .post('/api/users')
+      .post('/api/v1/users')
       .send({ email: 'nope', password: 'short' })
       .expect(400);
 
@@ -103,7 +104,7 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
 
   it('refuses an unknown property rather than silently accepting it', async () => {
     const response = await http()
-      .post('/api/users')
+      .post('/api/v1/users')
       .send({ email: 'ada@example.com', password: PASSWORD, status: 'ACTIVE' })
       .expect(400);
 
@@ -115,13 +116,13 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
     const auth = await tokenFor('ada@example.com');
 
     const fetched = ok<UserBody>(
-      await http().get(`/api/users/${created.uuid}`).set('Authorization', auth).expect(200),
+      await http().get(`/api/v1/users/${created.uuid}`).set('Authorization', auth).expect(200),
     );
     expect(fetched.email).toBe('ada@example.com');
 
     const updated = ok<UserBody>(
       await http()
-        .patch(`/api/users/${created.uuid}`)
+        .patch(`/api/v1/users/${created.uuid}`)
         .set('Authorization', auth)
         .send({ status: 'ACTIVE', email: 'grace@example.com' })
         .expect(200),
@@ -132,7 +133,7 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
     await register('ada@example.com').expect(201);
 
     const page = ok<PageBody>(
-      await http().get('/api/users?limit=1').set('Authorization', auth).expect(200),
+      await http().get('/api/v1/users?limit=1').set('Authorization', auth).expect(200),
     );
     expect(page).toMatchObject({ total: 2, limit: 1, totalPages: 2 });
     expect(page.items).toHaveLength(1);
@@ -144,10 +145,10 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
     await register('actor@example.com').expect(201);
     const auth = await tokenFor('actor@example.com');
 
-    await http().delete(`/api/users/${created.uuid}`).set('Authorization', auth).expect(204);
+    await http().delete(`/api/v1/users/${created.uuid}`).set('Authorization', auth).expect(204);
 
     const missing = await http()
-      .get(`/api/users/${created.uuid}`)
+      .get(`/api/v1/users/${created.uuid}`)
       .set('Authorization', auth)
       .expect(404);
     expect(fail(missing).error.code).toBe('USER_NOT_FOUND');
@@ -166,6 +167,6 @@ describe('Identity (e2e — requires Postgres, Redis, NATS + `make migrate-up`)'
     await register('ada@example.com').expect(201);
     const auth = await tokenFor('ada@example.com');
 
-    await http().get('/api/users/not-a-uuid').set('Authorization', auth).expect(400);
+    await http().get('/api/v1/users/not-a-uuid').set('Authorization', auth).expect(400);
   });
 });

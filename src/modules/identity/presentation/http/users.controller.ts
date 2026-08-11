@@ -14,6 +14,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { Public } from '../../../../platform/http/decorators/public.decorator';
+import { AuthRateLimit } from '../../../../platform/http/decorators/rate-limit.decorator';
 import {
   ApiAuthFailures,
   ApiEnvelope,
@@ -40,12 +41,16 @@ export class UsersController {
     private readonly queries: QueryBus,
   ) {}
 
+  // Public, and it writes a row and runs an Argon2id hash per call — the two
+  // properties that make an endpoint worth scripting against.
   @Public()
+  @AuthRateLimit()
   @Post()
   @ApiOperation({ summary: 'Register a user' })
   @ApiEnvelope(UserResponseDto, { status: 201, description: 'Registered' })
   @ApiValidationFailure()
   @ApiFailure(409, 'EMAIL_ALREADY_REGISTERED')
+  @ApiFailure(429, 'RATE_LIMITED', 'Tighter budget than the rest of the API')
   async register(@Body() dto: RegisterUserDto): Promise<UserResponseDto> {
     const user = await this.commands.execute<RegisterUserCommand, User>(
       new RegisterUserCommand(dto.email, dto.password),
