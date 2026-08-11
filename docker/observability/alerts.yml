@@ -1,0 +1,76 @@
+# Starting rules, not a finished alerting policy — tune the thresholds to your
+# traffic before relying on them. They are here because a dashboard nobody is
+# watching at 3am is not observability.
+#
+# No Alertmanager is wired up: routing a page is a deployment decision (who is
+# on call, and where). These fire in Prometheus' own alert list and in Grafana.
+
+groups:
+  - name: nest-kit-api
+    rules:
+      - alert: ApiDown
+        expr: up{job="nest-kit-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The API is not being scraped"
+          description: "No successful scrape for a minute — the process is gone, or /metrics is."
+
+      - alert: HighServerErrorRate
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+            / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5% of requests are failing"
+          description: "Filter Loki by level=error over the same window, then follow one correlationId."
+
+      - alert: SlowRequests
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 latency above 2s on {{ $labels.route }}"
+
+  - name: nest-kit-messaging
+    rules:
+      # The age of the oldest unpublished row, not its count: a steady backlog
+      # of ten is healthy, one row stuck for ten minutes is a broken relay.
+      - alert: OutboxNotDraining
+        expr: outbox_oldest_pending_age_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The outbox has not drained in five minutes"
+          description: "Check messaging_broker_reachable and GET /api/v1/admin/messaging/status."
+
+      - alert: EventsDeadLettered
+        expr: increase(events_dlq_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.event_type }} reached the dead-letter table"
+          description: "Inspect and replay via /api/v1/admin/messaging/dead-letters."
+
+      - alert: ConsumerMissing
+        expr: consumer_present == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Consumer {{ $labels.consumer }} has no consumer on the stream"
+          description: "A declared handler that never started: nothing is being delivered to it."
+
+      - alert: ConsumerFallingBehind
+        expr: consumer_pending_messages > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer {{ $labels.consumer }} is behind"

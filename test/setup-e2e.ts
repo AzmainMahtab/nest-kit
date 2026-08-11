@@ -17,6 +17,14 @@ process.env.OUTBOX_ENABLED = 'false';
 process.env.DURABLE_MAX_DELIVER = '3';
 process.env.DURABLE_NAK_DELAY_MS = '150';
 
+// The limiter stays *enabled* so every suite exercises the guard chain in the
+// order production runs it — a limiter that is switched off in tests is a
+// limiter whose interaction with auth is never tested. The budgets are raised
+// far out of reach instead; `operations.e2e-spec.ts` lowers them back down by
+// spying on AppConfig, which is read per request.
+process.env.RATE_LIMIT_LIMIT = '100000';
+process.env.RATE_LIMIT_AUTH_LIMIT = '100000';
+
 // Deliberately longer than any suite takes, so an authorization test that
 // passes proves the cache was *invalidated* rather than that it happened to
 // expire. A short TTL here would turn a broken invalidation into a green run.

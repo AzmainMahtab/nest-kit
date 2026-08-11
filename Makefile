@@ -1,4 +1,5 @@
 .PHONY: help dev dev-down prod prod-down down build logs ps sh db-up db-down psql redis-cli clean check keygen \
+        obs-up obs-down obs-logs \
         migrate-create migrate-up migrate-down migrate-status seed \
         dev-migrate dev-seed prod-migrate prod-seed
 
@@ -7,6 +8,9 @@ export
 
 DEV  = docker compose -f docker-compose.yml -f docker-compose.dev.yml
 PROD = docker compose -f docker-compose.yml -f docker-compose.prod.yml
+# A third overlay rather than part of DEV: four extra containers that a
+# feature-branch `make dev` does not need.
+OBS  = docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.observability.yml
 
 # ==========================================
 # MAIN COMMANDS
@@ -110,6 +114,22 @@ db-up: ## Start Postgres, Redis and NATS (for running the app on the host)
 
 db-down: ## Stop Postgres, Redis and NATS
 	docker compose stop postgres redis nats
+
+# ==========================================
+# OBSERVABILITY
+# ==========================================
+
+obs-up: ## Start the dev stack with Prometheus, Loki, Promtail and Grafana
+	$(OBS) up -d
+	@echo "Grafana    http://localhost:$(or $(GRAFANA_PORT),3001)  ($(or $(GRAFANA_USER),admin) / $(or $(GRAFANA_PASSWORD),admin))"
+	@echo "Prometheus http://localhost:$(or $(PROMETHEUS_PORT),9090)"
+	@echo "Metrics    http://localhost:$(or $(API_PORT),3000)/metrics"
+
+obs-down: ## Stop the observability containers, leaving the app running
+	$(OBS) stop prometheus loki promtail grafana
+
+obs-logs: ## Tail the observability containers
+	$(OBS) logs -f prometheus loki promtail grafana
 
 nats-info: ## Show JetStream stream state
 	@curl -s http://127.0.0.1:$(or $(NATS_MONITOR_PORT),8222)/jsz?streams=1 | head -40

@@ -50,4 +50,11 @@ export class ErrorEnvelopeDto {
 
   @ApiProperty({ example: '2026-08-05T12:25:13.333Z' })
   timestamp!: string;
+
+  @ApiProperty({
+    example: '019fd1c2-6f4a-7c31-9a2e-6d0f7b8c1a55',
+    description: 'Also returned as X-Request-Id. Quote it in a bug report.',
+    required: false,
+  })
+  correlationId?: string;
 }

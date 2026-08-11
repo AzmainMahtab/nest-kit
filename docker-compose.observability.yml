@@ -1,0 +1,89 @@
+name: nest-kit
+
+# Observability overlay: Prometheus scrapes /metrics, Promtail ships container
+# logs to Loki, Grafana reads both.
+#
+#   make obs-up      # dev stack + this
+#   make obs-down
+#
+# It is a separate overlay rather than part of the base stack because it is
+# four extra containers that a `make dev` for a feature branch does not need.
+# Nothing in the application depends on any of it — the app exposes /metrics
+# and writes JSON to stdout whether or not this is running, which is the point
+# of instrumenting through open formats instead of a vendor SDK.
+#
+# Sentry is deliberately absent. Metrics answer "how much and how bad",
+# structured logs answer "what exactly broke", and the correlation id joins
+# them: alert in Grafana, click through to the Loki query for that
+# `correlationId`, read the stack. A hosted error tracker adds issue grouping
+# and release regressions on top of that, which is a deployment's decision, not
+# a starter's dependency.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    container_name: nest-kit-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.6.11
+    container_name: nest-kit-loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.6.11
+    container_name: nest-kit-promtail
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./docker/observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      # Read-only: it discovers containers and reads their log files. It never
+      # needs to start, stop or exec anything, and a socket mounted read-write
+      # is root on the host for whatever is in the container.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.1.3
+    container_name: nest-kit-grafana
+    environment:
+      # Local-only defaults. Override both before putting this anywhere else.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Provisioned from files, so a dashboard someone fixes in the UI and
+      # never exports is not the only copy that exists.
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  loki_data:
+  grafana_data:

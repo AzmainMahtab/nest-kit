@@ -1,0 +1,2 @@
+# Grafana reads every provisioning subdirectory on start and logs an error
+# for each one that is missing. Empty is fine; absent is noise on every boot.

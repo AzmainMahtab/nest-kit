@@ -31,12 +31,12 @@ describe('Application (e2e)', () => {
   });
 
   it('an unmatched route returns the error envelope, not the Nest default shape', async () => {
-    const response = await request(app.getHttpServer()).get('/api/does-not-exist').expect(404);
+    const response = await request(app.getHttpServer()).get('/api/v1/does-not-exist').expect(404);
 
     expect(response.body).toMatchObject({
       success: false,
       error: { code: 'NOT_FOUND' },
-      path: '/api/does-not-exist',
+      path: '/api/v1/does-not-exist',
     });
   });
 });

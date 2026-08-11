@@ -37,7 +37,7 @@ describe('Outbox + NATS (e2e — requires Postgres, NATS and `make migrate-up`)'
   let nats: NatsConnection;
 
   const register = (email: string) =>
-    request(app.getHttpServer()).post('/api/users').send({ email, password: PASSWORD });
+    request(app.getHttpServer()).post('/api/v1/users').send({ email, password: PASSWORD });
 
   const rows = () => dataSource.query<EventRow[]>('SELECT * FROM outbox.events ORDER BY id');
 

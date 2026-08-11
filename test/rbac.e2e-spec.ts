@@ -64,13 +64,13 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
   const http = () => request(app.getHttpServer());
 
   const register = async (email: string): Promise<string> => {
-    const res = await http().post('/api/users').send({ email, password: PASSWORD }).expect(201);
+    const res = await http().post('/api/v1/users').send({ email, password: PASSWORD }).expect(201);
     return ok<UserBody>(res).uuid;
   };
 
   const login = async (email: string): Promise<string> => {
     const res = await http()
-      .post('/api/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email, password: PASSWORD })
       .expect(200);
     return `Bearer ${ok<{ accessToken: string }>(res).accessToken}`;
@@ -93,7 +93,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
   const createRole = async (name: string): Promise<RoleBody> =>
     ok<RoleBody>(
       await http()
-        .post('/api/rbac/roles')
+        .post('/api/v1/rbac/roles')
         .set('Authorization', admin)
         .send({ name, description: 'created by a test' })
         .expect(201),
@@ -102,7 +102,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
   const createPermission = async (name: string): Promise<PermissionBody> =>
     ok<PermissionBody>(
       await http()
-        .post('/api/rbac/permissions')
+        .post('/api/v1/rbac/permissions')
         .set('Authorization', admin)
         .send({ name })
         .expect(201),
@@ -152,7 +152,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
     it('ships every permission the routes actually require', async () => {
       const page = ok<PageBody<PermissionBody>>(
         await http()
-          .get('/api/rbac/permissions')
+          .get('/api/v1/rbac/permissions')
           .set('Authorization', admin)
           .query({ limit: 100 })
           .expect(200),
@@ -167,7 +167,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
     it('splits a permission name into its resource and action', async () => {
       const page = ok<PageBody<PermissionBody>>(
         await http()
-          .get('/api/rbac/permissions')
+          .get('/api/v1/rbac/permissions')
           .set('Authorization', admin)
           .query({ limit: 100 })
           .expect(200),
@@ -181,7 +181,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
     it('marks the admin role protected so it cannot lose rbac:admin', async () => {
       const page = ok<PageBody<RoleBody>>(
-        await http().get('/api/rbac/roles').set('Authorization', admin).expect(200),
+        await http().get('/api/v1/rbac/roles').set('Authorization', admin).expect(200),
       );
       const adminRole = page.items.find((r) => r.name === 'admin');
 
@@ -192,14 +192,14 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
   describe('the messaging admin API', () => {
     it('is still closed to an unauthenticated caller', async () => {
-      await http().get('/api/admin/messaging/status').expect(401);
+      await http().get('/api/v1/admin/messaging/status').expect(401);
     });
 
     it('refuses a merely authenticated user', async () => {
       // The hole this feature exists to close: before RBAC, any logged-in user
       // could replay and discard events.
       const res = await http()
-        .get('/api/admin/messaging/status')
+        .get('/api/v1/admin/messaging/status')
         .set('Authorization', plain)
         .expect(403);
 
@@ -208,39 +208,39 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
     it('refuses a merely authenticated user on the write routes too', async () => {
       await http()
-        .post('/api/admin/messaging/outbox/replay')
+        .post('/api/v1/admin/messaging/outbox/replay')
         .set('Authorization', plain)
         .send({})
         .expect(403);
 
       await http()
-        .post('/api/admin/messaging/dead-letters/discard')
+        .post('/api/v1/admin/messaging/dead-letters/discard')
         .set('Authorization', plain)
         .send({ consumerName: 'x', idempotencyKey: '00000000-0000-0000-0000-000000000000' })
         .expect(403);
     });
 
     it('admits a holder of messaging:admin', async () => {
-      await http().get('/api/admin/messaging/status').set('Authorization', admin).expect(200);
+      await http().get('/api/v1/admin/messaging/status').set('Authorization', admin).expect(200);
     });
   });
 
   describe('administering roles', () => {
     it('refuses a non-admin every write route', async () => {
       await http()
-        .post('/api/rbac/roles')
+        .post('/api/v1/rbac/roles')
         .set('Authorization', plain)
         .send({ name: 'sneaky' })
         .expect(403);
 
       await http()
-        .post('/api/rbac/permissions')
+        .post('/api/v1/rbac/permissions')
         .set('Authorization', plain)
         .send({ name: 'sneaky:everything' })
         .expect(403);
 
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', plain)
         .send({ roleUuid: '00000000-0000-0000-0000-000000000000' })
         .expect(403);
@@ -252,7 +252,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
       const updated = ok<RoleBody>(
         await http()
-          .post(`/api/rbac/roles/${role.uuid}/permissions`)
+          .post(`/api/v1/rbac/roles/${role.uuid}/permissions`)
           .set('Authorization', admin)
           .send({ permission: permission.name })
           .expect(201),
@@ -263,7 +263,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
     it('rejects a permission name that is not resource:action', async () => {
       const res = await http()
-        .post('/api/rbac/permissions')
+        .post('/api/v1/rbac/permissions')
         .set('Authorization', admin)
         .send({ name: 'Billing Refund' })
         .expect(400);
@@ -275,7 +275,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
       await createRole('support-agent');
 
       const res = await http()
-        .post('/api/rbac/roles')
+        .post('/api/v1/rbac/roles')
         .set('Authorization', admin)
         .send({ name: 'support-agent' })
         .expect(409);
@@ -285,12 +285,12 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
     it('refuses to change the protected admin role', async () => {
       const page = ok<PageBody<RoleBody>>(
-        await http().get('/api/rbac/roles').set('Authorization', admin).expect(200),
+        await http().get('/api/v1/rbac/roles').set('Authorization', admin).expect(200),
       );
       const adminRole = page.items.find((r) => r.name === 'admin');
 
       const res = await http()
-        .delete(`/api/rbac/roles/${adminRole?.uuid}/permissions/rbac:admin`)
+        .delete(`/api/v1/rbac/roles/${adminRole?.uuid}/permissions/rbac:admin`)
         .set('Authorization', admin)
         .expect(409);
 
@@ -301,7 +301,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
       const role = await createRole('support-agent');
 
       const res = await http()
-        .post('/api/rbac/users/00000000-0000-0000-0000-000000000000/roles')
+        .post('/api/v1/rbac/users/00000000-0000-0000-0000-000000000000/roles')
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(400);
@@ -313,84 +313,84 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
   describe('assignment and its effect on access', () => {
     it('takes effect immediately, without waiting for the cache to expire', async () => {
       // The plain user's empty grants are cached by this first 403.
-      await http().get('/api/rbac/roles').set('Authorization', plain).expect(403);
+      await http().get('/api/v1/rbac/roles').set('Authorization', plain).expect(403);
 
       const role = await createRole('auditor');
       await http()
-        .post(`/api/rbac/roles/${role.uuid}/permissions`)
+        .post(`/api/v1/rbac/roles/${role.uuid}/permissions`)
         .set('Authorization', admin)
         .send({ permission: 'rbac:read' })
         .expect(201);
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(204);
 
       // With RBAC_CACHE_TTL_SECONDS at 300 in the e2e setup, this can only pass
       // if the assignment evicted the cached entry.
-      await http().get('/api/rbac/roles').set('Authorization', plain).expect(200);
+      await http().get('/api/v1/rbac/roles').set('Authorization', plain).expect(200);
     });
 
     it('revokes access as soon as the role is taken away', async () => {
       const role = await createRole('auditor');
       await http()
-        .post(`/api/rbac/roles/${role.uuid}/permissions`)
+        .post(`/api/v1/rbac/roles/${role.uuid}/permissions`)
         .set('Authorization', admin)
         .send({ permission: 'rbac:read' })
         .expect(201);
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(204);
-      await http().get('/api/rbac/roles').set('Authorization', plain).expect(200);
+      await http().get('/api/v1/rbac/roles').set('Authorization', plain).expect(200);
 
       await http()
-        .delete(`/api/rbac/users/${plainUuid}/roles/${role.uuid}`)
+        .delete(`/api/v1/rbac/users/${plainUuid}/roles/${role.uuid}`)
         .set('Authorization', admin)
         .expect(204);
 
-      await http().get('/api/rbac/roles').set('Authorization', plain).expect(403);
+      await http().get('/api/v1/rbac/roles').set('Authorization', plain).expect(403);
     });
 
     it('propagates a permission granted to a role the user already holds', async () => {
       const role = await createRole('auditor');
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(204);
-      await http().get('/api/rbac/roles').set('Authorization', plain).expect(403);
+      await http().get('/api/v1/rbac/roles').set('Authorization', plain).expect(403);
 
       // Nothing about the *user* changed here — only the role — so this passes
       // only if the invalidation expanded the role to its holders.
       await http()
-        .post(`/api/rbac/roles/${role.uuid}/permissions`)
+        .post(`/api/v1/rbac/roles/${role.uuid}/permissions`)
         .set('Authorization', admin)
         .send({ permission: 'rbac:read' })
         .expect(201);
 
-      await http().get('/api/rbac/roles').set('Authorization', plain).expect(200);
+      await http().get('/api/v1/rbac/roles').set('Authorization', plain).expect(200);
     });
 
     it('is idempotent and keeps the original audit trail', async () => {
       const role = await createRole('auditor');
 
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(204);
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(204);
 
       const assignments = ok<AssignmentBody[]>(
         await http()
-          .get(`/api/rbac/users/${plainUuid}/roles`)
+          .get(`/api/v1/rbac/users/${plainUuid}/roles`)
           .set('Authorization', admin)
           .expect(200),
       );
@@ -403,7 +403,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
   describe('grants', () => {
     it('lets any authenticated caller read their own, with no permission', async () => {
       const grants = ok<GrantsBody>(
-        await http().get('/api/rbac/me/grants').set('Authorization', plain).expect(200),
+        await http().get('/api/v1/rbac/me/grants').set('Authorization', plain).expect(200),
       );
 
       expect(grants).toEqual({ roles: [], permissions: [] });
@@ -411,7 +411,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
     it("reports the admin's roles and effective permissions", async () => {
       const grants = ok<GrantsBody>(
-        await http().get('/api/rbac/me/grants').set('Authorization', admin).expect(200),
+        await http().get('/api/v1/rbac/me/grants').set('Authorization', admin).expect(200),
       );
 
       expect(grants.roles).toEqual(['admin']);
@@ -420,7 +420,7 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
 
     it("refuses a non-admin reading someone else's", async () => {
       await http()
-        .get(`/api/rbac/users/${adminUuid}/grants`)
+        .get(`/api/v1/rbac/users/${adminUuid}/grants`)
         .set('Authorization', plain)
         .expect(403);
     });
@@ -431,19 +431,19 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
       for (const name of ['auditor', 'support-agent']) {
         const role = await createRole(name);
         await http()
-          .post(`/api/rbac/roles/${role.uuid}/permissions`)
+          .post(`/api/v1/rbac/roles/${role.uuid}/permissions`)
           .set('Authorization', admin)
           .send({ permission: permission.name })
           .expect(201);
         await http()
-          .post(`/api/rbac/users/${plainUuid}/roles`)
+          .post(`/api/v1/rbac/users/${plainUuid}/roles`)
           .set('Authorization', admin)
           .send({ roleUuid: role.uuid })
           .expect(204);
       }
 
       const grants = ok<GrantsBody>(
-        await http().get('/api/rbac/me/grants').set('Authorization', plain).expect(200),
+        await http().get('/api/v1/rbac/me/grants').set('Authorization', plain).expect(200),
       );
 
       expect(grants.roles.sort()).toEqual(['auditor', 'support-agent']);
@@ -453,13 +453,13 @@ describe('RBAC (e2e — requires Postgres, Redis, NATS + `make migrate-up`)', ()
     it('reports a role that grants nothing, without inventing a permission', async () => {
       const role = await createRole('bare');
       await http()
-        .post(`/api/rbac/users/${plainUuid}/roles`)
+        .post(`/api/v1/rbac/users/${plainUuid}/roles`)
         .set('Authorization', admin)
         .send({ roleUuid: role.uuid })
         .expect(204);
 
       const grants = ok<GrantsBody>(
-        await http().get('/api/rbac/me/grants').set('Authorization', plain).expect(200),
+        await http().get('/api/v1/rbac/me/grants').set('Authorization', plain).expect(200),
       );
 
       expect(grants).toEqual({ roles: ['bare'], permissions: [] });

@@ -82,9 +82,15 @@ services:
     ports:
       - "${API_PORT:-3000}:3000"
     healthcheck:
-      # /health is deliberately excluded from API_PREFIX so the probe does not
-      # move when the prefix changes.
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/health"]
+      # /health/ready, not /health: compose gates dependent containers on this,
+      # and "the process started" is not the same as "it can serve". Both are
+      # excluded from API_PREFIX and unversioned, so neither probe moves when
+      # the prefix or the API version changes.
+      #
+      # It returns 503 only when Postgres or Redis is down. A NATS outage
+      # reports `degraded` and still passes, because the outbox is designed to
+      # absorb exactly that.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 5

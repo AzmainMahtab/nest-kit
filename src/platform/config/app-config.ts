@@ -31,6 +31,14 @@ export class AppConfig {
     return this.get('API_PREFIX');
   }
 
+  get apiDefaultVersion(): string {
+    return this.get('API_DEFAULT_VERSION');
+  }
+
+  get trustProxy(): boolean {
+    return this.get('TRUST_PROXY');
+  }
+
   get corsOrigins(): string[] {
     return this.get('CORS_ORIGINS')
       .split(',')
@@ -108,6 +116,37 @@ export class AppConfig {
       superadminEmail: this.get('SEED_SUPERADMIN_EMAIL').trim(),
       superadminPassword: this.get('SEED_SUPERADMIN_PASSWORD'),
       allowRemote: this.get('ALLOW_REMOTE_SEED'),
+    };
+  }
+
+  get logging() {
+    return {
+      level: this.get('LOG_LEVEL'),
+      // Machine-readable where something is collecting it, readable where a
+      // person is watching it.
+      format: this.get('LOG_FORMAT') ?? (this.isProduction ? 'json' : 'pretty'),
+    };
+  }
+
+  get metrics() {
+    return {
+      enabled: this.get('METRICS_ENABLED'),
+    };
+  }
+
+  get rateLimit() {
+    return {
+      enabled: this.get('RATE_LIMIT_ENABLED'),
+      limit: this.get('RATE_LIMIT_LIMIT'),
+      windowSeconds: this.get('RATE_LIMIT_WINDOW_SECONDS'),
+      authLimit: this.get('RATE_LIMIT_AUTH_LIMIT'),
+      authWindowSeconds: this.get('RATE_LIMIT_AUTH_WINDOW_SECONDS'),
+    };
+  }
+
+  get health() {
+    return {
+      timeoutMs: this.get('HEALTH_CHECK_TIMEOUT_MS'),
     };
   }
 

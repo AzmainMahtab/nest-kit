@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, Logger } from '@n
 import { Request, Response } from 'express';
 
 import { AppError, ErrorItem, ErrorKind } from '../../../shared/errors';
+import { correlationIdOf } from '../../observability/correlation-id.middleware';
 import { ErrorEnvelope } from '../responses/envelope';
 
 /**
@@ -18,6 +19,7 @@ export class AppErrorFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
 
     const error = this.toAppError(exception);
+    const correlationId = correlationIdOf(request);
 
     if (error.kind === ErrorKind.Internal) {
       this.logger.error(
@@ -35,6 +37,7 @@ export class AppErrorFilter implements ExceptionFilter {
       },
       path: request.url,
       timestamp: new Date().toISOString(),
+      correlationId,
     };
 
     response.status(error.status).json(body);
@@ -89,6 +92,8 @@ export class AppErrorFilter implements ExceptionFilter {
         return ErrorKind.NotFound;
       case 409:
         return ErrorKind.Conflict;
+      case 429:
+        return ErrorKind.RateLimited;
       default:
         return status < 500 ? ErrorKind.Invalid : ErrorKind.Internal;
     }

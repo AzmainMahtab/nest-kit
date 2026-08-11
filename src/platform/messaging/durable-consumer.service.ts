@@ -4,10 +4,15 @@ import { AckPolicy, ConsumerMessages, DeliverPolicy, JsMsg } from '@nats-io/jets
 
 import { UnitOfWork } from '../../shared/application';
 import { AppConfig } from '../config';
+import { MetricsService } from '../observability/metrics.service';
 import { DeadLetterRepository } from './dead-letter.repository';
 import { DurableEventHandler, EventMessage } from './durable-event-handler';
 import { NatsClient, STREAM_NAME, SUBJECT_PREFIX } from './nats-client';
 import { ProcessedEventRepository } from './processed-event.repository';
+
+function elapsedSeconds(startedAt: bigint): number {
+  return Number(process.hrtime.bigint() - startedAt) / 1e9;
+}
 
 function isEventMessage(value: unknown): value is EventMessage {
   if (typeof value !== 'object' || value === null) {
@@ -39,6 +44,7 @@ export class DurableConsumerService implements OnApplicationBootstrap, OnApplica
     private readonly deadLetters: DeadLetterRepository,
     private readonly uow: UnitOfWork,
     private readonly config: AppConfig,
+    private readonly metrics: MetricsService,
   ) {}
 
   /** Every provider that extends DurableEventHandler, wherever it is declared. */
@@ -156,6 +162,8 @@ export class DurableConsumerService implements OnApplicationBootstrap, OnApplica
     }
 
     const event: EventMessage = parsed;
+    const started = process.hrtime.bigint();
+    let duplicate = false;
 
     try {
       await this.uow.withTransaction(async () => {
@@ -163,6 +171,7 @@ export class DurableConsumerService implements OnApplicationBootstrap, OnApplica
         // rolls back both and redelivery genuinely retries.
         if (!(await this.processed.claim(handler.consumerName, event.idempotencyKey))) {
           this.logger.debug(`${handler.consumerName}: skipped duplicate ${event.idempotencyKey}`);
+          duplicate = true;
           return;
         }
 
@@ -170,12 +179,23 @@ export class DurableConsumerService implements OnApplicationBootstrap, OnApplica
       });
 
       message.ack();
+
+      // Duplicates are counted separately rather than dropped: at-least-once
+      // delivery makes some redelivery normal, but a duplicate rate that
+      // climbs means the relay is re-sending, which is a different fault from
+      // a handler that fails.
+      this.metrics.eventConsumed(event.name, duplicate ? 'duplicate' : 'ok');
+      this.metrics.eventHandled(event.name, elapsedSeconds(started));
     } catch (error) {
+      this.metrics.eventConsumed(event.name, 'failed');
+      this.metrics.eventHandled(event.name, elapsedSeconds(started));
+
       const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       const deliveryCount = message.info.deliveryCount;
 
       if (deliveryCount >= maxDeliver) {
         await this.deadLetters.record(handler.consumerName, event, reason, deliveryCount);
+        this.metrics.eventDeadLettered(event.name);
         message.term('max deliveries exceeded');
         this.logger.error(
           `${handler.consumerName}: dead-lettered ${event.name} (${event.idempotencyKey}) after ${deliveryCount} deliveries: ${reason}`,

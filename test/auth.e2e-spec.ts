@@ -30,9 +30,9 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
   const http = () => request(app.getHttpServer());
 
   const registerAndLogin = async (email: string): Promise<Tokens> => {
-    await http().post('/api/users').send({ email, password: PASSWORD }).expect(201);
+    await http().post('/api/v1/users').send({ email, password: PASSWORD }).expect(201);
     const res = await http()
-      .post('/api/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email, password: PASSWORD })
       .expect(200);
     return ok<Tokens>(res);
@@ -61,19 +61,19 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
 
   describe('access control', () => {
     it('denies an unauthenticated request by default', async () => {
-      const res = await http().get('/api/users').expect(401);
+      const res = await http().get('/api/v1/users').expect(401);
 
       expect(fail(res).error.code).toBe('MISSING_TOKEN');
     });
 
     it('leaves registration, login and health public', async () => {
       await http()
-        .post('/api/users')
+        .post('/api/v1/users')
         .send({ email: 'ada@example.com', password: PASSWORD })
         .expect(201);
       await http().get('/health').expect(200);
       await http()
-        .post('/api/auth/login')
+        .post('/api/v1/auth/login')
         .send({ email: 'ada@example.com', password: PASSWORD })
         .expect(200);
     });
@@ -82,21 +82,21 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
       const tokens = await registerAndLogin('ada@example.com');
 
       await http()
-        .get('/api/users')
+        .get('/api/v1/users')
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .expect(200);
     });
 
     it('rejects a malformed or unsigned token', async () => {
-      await http().get('/api/users').set('Authorization', 'Bearer not-a-token').expect(401);
-      await http().get('/api/users').set('Authorization', 'Basic abc').expect(401);
+      await http().get('/api/v1/users').set('Authorization', 'Bearer not-a-token').expect(401);
+      await http().get('/api/v1/users').set('Authorization', 'Basic abc').expect(401);
     });
 
     it('rejects a refresh token used as an access token', async () => {
       const tokens = await registerAndLogin('ada@example.com');
 
       const res = await http()
-        .get('/api/users')
+        .get('/api/v1/users')
         .set('Authorization', `Bearer ${tokens.refreshToken}`)
         .expect(401);
 
@@ -107,17 +107,17 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
   describe('login', () => {
     it('is deliberately vague about which half was wrong', async () => {
       await http()
-        .post('/api/users')
+        .post('/api/v1/users')
         .send({ email: 'ada@example.com', password: PASSWORD })
         .expect(201);
 
       const wrongPassword = await http()
-        .post('/api/auth/login')
+        .post('/api/v1/auth/login')
         .send({ email: 'ada@example.com', password: 'not-the-password' })
         .expect(401);
 
       const unknownUser = await http()
-        .post('/api/auth/login')
+        .post('/api/v1/auth/login')
         .send({ email: 'nobody@example.com', password: PASSWORD })
         .expect(401);
 
@@ -130,19 +130,19 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
     it('refuses a suspended account', async () => {
       const tokens = await registerAndLogin('ada@example.com');
       const users = await http()
-        .get('/api/users')
+        .get('/api/v1/users')
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .expect(200);
       const uuid = ok<{ items: { uuid: string }[] }>(users).items[0]!.uuid;
 
       await http()
-        .patch(`/api/users/${uuid}`)
+        .patch(`/api/v1/users/${uuid}`)
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .send({ status: 'SUSPENDED' })
         .expect(200);
 
       const res = await http()
-        .post('/api/auth/login')
+        .post('/api/v1/auth/login')
         .send({ email: 'ada@example.com', password: PASSWORD })
         .expect(403);
 
@@ -165,7 +165,7 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
       const first = await registerAndLogin('ada@example.com');
 
       const res = await http()
-        .post('/api/auth/refresh')
+        .post('/api/v1/auth/refresh')
         .send({ refreshToken: first.refreshToken })
         .expect(200);
       const second = ok<Tokens>(res);
@@ -174,7 +174,7 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
 
       // The new one works.
       await http()
-        .get('/api/users')
+        .get('/api/v1/users')
         .set('Authorization', `Bearer ${second.accessToken}`)
         .expect(200);
     });
@@ -184,7 +184,7 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
 
       const second = ok<Tokens>(
         await http()
-          .post('/api/auth/refresh')
+          .post('/api/v1/auth/refresh')
           .send({ refreshToken: first.refreshToken })
           .expect(200),
       );
@@ -192,14 +192,14 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
       // Replay of the superseded token: the legitimate client has moved on, so
       // this is a stolen token.
       const replay = await http()
-        .post('/api/auth/refresh')
+        .post('/api/v1/auth/refresh')
         .send({ refreshToken: first.refreshToken })
         .expect(401);
       expect(fail(replay).error.code).toBe('REFRESH_TOKEN_REPLAYED');
 
       // The attacker's newer token is dead too — the session itself is revoked.
       await http()
-        .post('/api/auth/refresh')
+        .post('/api/v1/auth/refresh')
         .send({ refreshToken: second.refreshToken })
         .expect(401);
 
@@ -215,18 +215,18 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
       const tokens = await registerAndLogin('ada@example.com');
 
       await http()
-        .get('/api/users')
+        .get('/api/v1/users')
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .expect(200);
 
       await http()
-        .post('/api/auth/logout')
+        .post('/api/v1/auth/logout')
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .expect(204);
 
       // Still cryptographically valid and unexpired — only the blacklist stops it.
       const res = await http()
-        .get('/api/users')
+        .get('/api/v1/users')
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .expect(401);
       expect(fail(res).error.code).toBe('TOKEN_REVOKED');
@@ -236,18 +236,18 @@ describe('Auth (e2e — requires Postgres, Redis, NATS and `make migrate-up`)', 
       const tokens = await registerAndLogin('ada@example.com');
 
       await http()
-        .post('/api/auth/logout')
+        .post('/api/v1/auth/logout')
         .set('Authorization', `Bearer ${tokens.accessToken}`)
         .expect(204);
 
       await http()
-        .post('/api/auth/refresh')
+        .post('/api/v1/auth/refresh')
         .send({ refreshToken: tokens.refreshToken })
         .expect(401);
     });
 
     it('requires authentication', async () => {
-      await http().post('/api/auth/logout').expect(401);
+      await http().post('/api/v1/auth/logout').expect(401);
     });
   });
 });

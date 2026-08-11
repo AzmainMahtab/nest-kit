@@ -33,7 +33,7 @@ describe('Durable consumer (e2e — requires Postgres, NATS and `make migrate-up
   let nats: NatsClient;
 
   const register = (email: string) =>
-    request(app.getHttpServer()).post('/api/users').send({ email, password: PASSWORD });
+    request(app.getHttpServer()).post('/api/v1/users').send({ email, password: PASSWORD });
 
   const notifications = () =>
     dataSource.query<NotificationRow[]>(

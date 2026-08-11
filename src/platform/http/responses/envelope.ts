@@ -17,6 +17,12 @@ export interface ErrorEnvelope {
   };
   path: string;
   timestamp: string;
+  /**
+   * The `X-Request-Id` of the failing request. It is the one thing a user can
+   * read off a screen and paste into a log query, so it belongs in the body
+   * and not only in a header nobody sees.
+   */
+  correlationId?: string;
 }
 
 export type Envelope<T> = SuccessEnvelope<T> | ErrorEnvelope;
