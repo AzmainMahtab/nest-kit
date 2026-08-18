@@ -56,6 +56,10 @@ export class AppError extends Error {
     return new AppError(ErrorKind.Forbidden, code, message);
   }
 
+  static payloadTooLarge(code: string, message: string): AppError {
+    return new AppError(ErrorKind.PayloadTooLarge, code, message);
+  }
+
   static rateLimited(code: string, message: string): AppError {
     return new AppError(ErrorKind.RateLimited, code, message);
   }

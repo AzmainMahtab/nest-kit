@@ -1,4 +1,5 @@
 import { INestApplication, VersioningType } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 
 import { AppConfig } from '../config';
 import { AppErrorFilter } from './filters/app-error.filter';
@@ -35,6 +36,16 @@ export function configureApp(app: INestApplication): void {
     type: VersioningType.URI,
     defaultVersion: config.apiDefaultVersion,
   });
+
+  /**
+   * Express defaults to 100kb for JSON, which is a limit by accident rather
+   * than by decision — and nothing at all bounds urlencoded bodies once a
+   * parser is configured. Both are set explicitly so the number is visible
+   * and tunable; multipart is bounded separately by `UPLOAD_MAX_BYTES`.
+   */
+  const express = app as NestExpressApplication;
+  express.useBodyParser('json', { limit: config.bodyLimit });
+  express.useBodyParser('urlencoded', { limit: config.bodyLimit, extended: true });
 
   app.useGlobalPipes(createValidationPipe());
   app.useGlobalInterceptors(new ResponseEnvelopeInterceptor());

@@ -11,6 +11,12 @@
 // Drive the relay explicitly with relay.tick() instead of racing its interval.
 process.env.OUTBOX_ENABLED = 'false';
 
+// Same reason, and the same failure it prevents: a sweep firing on its own
+// timer queries the database while an unrelated suite is closing the app,
+// which surfaces as a run that never exits rather than as a failed assertion.
+// Tasks are driven with scheduler.tick(task) where they are under test.
+process.env.SCHEDULER_ENABLED = 'false';
+
 // Production backoff is 5 deliveries two seconds apart; exercising that here
 // would spend ten seconds asleep. What is under test is the escalation to a
 // dead letter, not the wall-clock spacing.

@@ -103,6 +103,74 @@ export const envSchema = z.object({
   // fast rather than hang while Kubernetes waits.
   HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
 
+  // Object storage, over the S3 API. Empty endpoint means AWS; anything else
+  // is MinIO, R2, Wasabi or another implementation.
+  // Local-first, like POSTGRES_HOST and NATS_URL: a clone runs against the
+  // MinIO container without being configured. Set it empty for AWS, which
+  // resolves its own endpoint from the region.
+  S3_ENDPOINT: z.string().default('http://localhost:9000'),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_BUCKET: z.string().default('nest-kit'),
+  // Local-first, matching the MinIO container, exactly as POSTGRES_USER and
+  // POSTGRES_PASSWORD default to the local database's. Setting BOTH to empty
+  // is the documented way to hand credential resolution to the AWS SDK's own
+  // chain — an instance role, IRSA, a shared profile — which is what a
+  // production deployment should do.
+  S3_ACCESS_KEY_ID: z.string().default('minioadmin'),
+  S3_SECRET_ACCESS_KEY: z.string().default('minioadmin'),
+  // MinIO and most self-hosted stores cannot do virtual-host addressing
+  // without wildcard DNS. AWS prefers it off.
+  S3_FORCE_PATH_STYLE: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  // How long a presigned upload or download URL stays valid.
+  S3_PRESIGN_EXPIRY_SECONDS: z.coerce.number().int().positive().max(604800).default(900),
+  // Refused before a handler runs. An ERP takes print-ready PDFs, so this is
+  // generous by web standards and still finite — the default with no limit at
+  // all is the whole of memory.
+  UPLOAD_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(25 * 1024 * 1024),
+  // Applies to JSON and urlencoded bodies, which have no business being large.
+  // Multipart is bounded by UPLOAD_MAX_BYTES instead.
+  BODY_LIMIT: z.string().default('1mb'),
+
+  // Mail. Off by default: the log adapter records UNCONFIGURED rather than
+  // reporting a success nobody received.
+  MAIL_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  MAIL_FROM: z.string().default('no-reply@example.test'),
+  // How often queued notifications are swept, and how many attempts each gets
+  // before it stops being retried and starts being a question for an operator.
+  NOTIFICATION_DISPATCH_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  NOTIFICATION_DISPATCH_BATCH: z.coerce.number().int().positive().max(500).default(50),
+  NOTIFICATION_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+
+  // Timed work. One replica runs each task per tick, chosen by a Redis lock.
+  SCHEDULER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  // Must comfortably exceed the longest task, or a second replica picks the
+  // work up while the first is still on it. It is a safety net for a dead
+  // process, not a timeout.
+  SCHEDULER_LOCK_TTL_MS: z.coerce.number().int().positive().default(60000),
+
+  // Outbound calls. One timeout, one retry policy and one breaker for every
+  // integration, so a new upstream cannot arrive without them.
+  UPSTREAM_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  UPSTREAM_MAX_ATTEMPTS: z.coerce.number().int().positive().max(10).default(3),
+  UPSTREAM_RETRY_BASE_MS: z.coerce.number().int().nonnegative().default(100),
+  UPSTREAM_RETRY_MAX_MS: z.coerce.number().int().nonnegative().default(2000),
+  // Consecutive failures to one host before calls to it are suspended.
+  UPSTREAM_BREAKER_THRESHOLD: z.coerce.number().int().positive().default(5),
+  UPSTREAM_BREAKER_RESET_MS: z.coerce.number().int().positive().default(30000),
+
   JWT_PRIVATE_KEY_PATH: z.string().default('certs/private.pem'),
   JWT_PUBLIC_KEY_PATH: z.string().default('certs/public.pem'),
   // Seconds, not a duration string: the tokenizer needs a number, and parsing

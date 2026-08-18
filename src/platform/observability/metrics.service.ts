@@ -70,6 +70,21 @@ export class MetricsService {
     registers: [this.registry],
   });
 
+  private readonly upstreamRequests = new Counter({
+    name: 'upstream_requests_total',
+    help: 'Calls made to an upstream dependency, by host and outcome',
+    labelNames: ['host', 'outcome'] as const,
+    registers: [this.registry],
+  });
+
+  private readonly upstreamDuration = new Histogram({
+    name: 'upstream_request_duration_seconds',
+    help: 'Wall time of an upstream call, including retries',
+    labelNames: ['host'] as const,
+    buckets: [0.01, 0.05, 0.1, 0.5, 1, 5, 30],
+    registers: [this.registry],
+  });
+
   private readonly rateLimitRejections = new Counter({
     name: 'rate_limit_rejected_total',
     help: 'Requests rejected by the rate limiter',
@@ -88,6 +103,12 @@ export class MetricsService {
   httpRequest(method: string, route: string, statusCode: number, seconds: number): void {
     this.httpRequests.inc({ method, route, status_code: String(statusCode) });
     this.httpDuration.observe({ method, route }, seconds);
+  }
+
+  /** `host`, never a URL — a path carries ids, and a label may never be unbounded. */
+  upstreamRequest(host: string, outcome: string, seconds: number): void {
+    this.upstreamRequests.inc({ host, outcome });
+    this.upstreamDuration.observe({ host }, seconds);
   }
 
   eventPublished(eventType: string): void {

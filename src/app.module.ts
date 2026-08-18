@@ -14,8 +14,12 @@ import { EventBusModule } from './platform/eventbus/eventbus.module';
 import { HealthModule } from './platform/health/health.module';
 import { HttpModule } from './platform/http/http.module';
 import { MessagingModule } from './platform/messaging/messaging.module';
+import { MailModule } from './platform/mail/mail.module';
 import { ObservabilityModule } from './platform/observability';
 import { OutboxModule } from './platform/outbox';
+import { SchedulingModule } from './platform/scheduling/scheduling.module';
+import { StorageModule } from './platform/storage/storage.module';
+import { UpstreamModule } from './platform/upstream/upstream.module';
 
 @Module({
   imports: [
@@ -28,6 +32,10 @@ import { OutboxModule } from './platform/outbox';
     DatabaseModule,
     CryptoModule,
     CacheModule,
+    MailModule,
+    SchedulingModule,
+    StorageModule,
+    UpstreamModule,
     EventBusModule,
     // Registers the rate limiter as a global guard. Must stay above
     // AuthModule — Nest runs global guards in registration order, and the

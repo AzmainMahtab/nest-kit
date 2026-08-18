@@ -92,6 +92,11 @@ export class AppErrorFilter implements ExceptionFilter {
         return ErrorKind.NotFound;
       case 409:
         return ErrorKind.Conflict;
+      // What multer raises when an upload exceeds UPLOAD_MAX_BYTES. Collapsing
+      // it into a generic 400 tells the client its JSON was malformed, which
+      // sends whoever is debugging to entirely the wrong place.
+      case 413:
+        return ErrorKind.PayloadTooLarge;
       case 429:
         return ErrorKind.RateLimited;
       default:

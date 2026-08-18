@@ -109,11 +109,12 @@ sh: ## Open a shell in the api container
 # DATABASES
 # ==========================================
 
-db-up: ## Start Postgres, Redis and NATS (for running the app on the host)
-	$(DEV) up -d postgres redis nats
+db-up: ## Start Postgres, Redis, NATS and MinIO (for running the app on the host)
+	$(DEV) up -d postgres redis nats minio
+	$(DEV) up minio-init
 
-db-down: ## Stop Postgres, Redis and NATS
-	docker compose stop postgres redis nats
+db-down: ## Stop Postgres, Redis, NATS and MinIO
+	docker compose stop postgres redis nats minio
 
 # ==========================================
 # OBSERVABILITY
@@ -136,6 +137,10 @@ nats-info: ## Show JetStream stream state
 
 psql: ## Open a psql shell
 	docker compose exec postgres psql -U $(or $(POSTGRES_USER),app) -d $(or $(POSTGRES_DB),appdb)
+
+minio-console: ## Print the MinIO console URL and its credentials
+	@echo "MinIO console  http://localhost:$(or $(MINIO_CONSOLE_PORT),9001)  ($(or $(S3_ACCESS_KEY_ID),minioadmin) / $(or $(S3_SECRET_ACCESS_KEY),minioadmin))"
+	@echo "S3 endpoint    http://localhost:$(or $(MINIO_PORT),9000)   bucket: $(or $(S3_BUCKET),nest-kit)"
 
 redis-cli: ## Open a redis-cli shell
 	docker compose exec redis redis-cli

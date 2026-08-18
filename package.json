@@ -33,6 +33,9 @@
     "seed": "ts-node -r tsconfig-paths/register src/main.seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1111.0",
+    "@aws-sdk/lib-storage": "^3.1111.0",
+    "@aws-sdk/s3-request-presigner": "^3.1111.0",
     "@nats-io/jetstream": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
     "@nestjs/common": "^11.0.1",

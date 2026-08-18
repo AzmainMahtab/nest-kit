@@ -13,6 +13,10 @@ export class NotificationOrmEntity {
   @Column({ type: 'uuid', name: 'recipient_uuid' })
   recipientUuid!: string;
 
+  // Copied at queue time, not joined from identity at send time.
+  @Column({ type: 'varchar', length: 320, name: 'recipient_address' })
+  recipientAddress!: string;
+
   @Column({ type: 'varchar', length: 32 })
   channel!: string;
 
@@ -22,6 +26,21 @@ export class NotificationOrmEntity {
   @Column({ type: 'text' })
   body!: string;
 
+  @Column({ type: 'varchar', length: 16 })
+  status!: string;
+
+  @Column({ type: 'int' })
+  attempts!: number;
+
+  @Column({ type: 'text', name: 'last_error', nullable: true })
+  lastError!: string | null;
+
+  @Column({ type: 'timestamptz', name: 'sent_at', nullable: true })
+  sentAt!: Date | null;
+
   @Column({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
+
+  @Column({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 }
