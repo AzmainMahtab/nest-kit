@@ -74,7 +74,8 @@ src/
 │   ├── index.ts                  # the context's ONLY public surface
 │   └── <context>.module.ts
 ├── platform/                     # config, database, http, crypto, eventbus,
-│                                 # messaging, outbox, health, observability
+│                                 # messaging, outbox, health, observability,
+│                                 # storage, mail, upstream, scheduling
 ├── shared/                       # shared kernel — pure, framework-free
 └── database/
     ├── migrations/
@@ -744,6 +745,20 @@ Forbidden because it breaks the above: importing another context's internals (on
 | Rate limiter store | Redis fixed window, one Lua `eval` | Two replicas behind a balancer make an in-memory limit of 10 a limit of 20, and it resets on every deploy. One script keeps INCR + EXPIRE + TTL from interleaving and returns the reset for `Retry-After` | In-memory counters; separate INCR and EXPIRE round trips |
 | Rate limiter failure mode | Fails open | A limiter outage must not become an outage — this is a safeguard, not an authorization decision | Fail closed, on the grounds that it is "safer" |
 | Limiter guard position | `APP_GUARD` registered above `AuthModule` | Rejects a credential-less flood before it costs a signature verification and a Redis lookup, and covers login, which has no token to check. Pinned by an e2e test expecting 429 rather than 401 | Below the auth guard, or route-scoped |
+| Storage backend | The S3 API, with MinIO in the dev stack | Written against the API rather than against AWS: an endpoint and path-style addressing make the same adapter MinIO on a laptop, R2, Backblaze, Wasabi or AWS itself. A local-disk adapter was written first and deleted — it made the *seam* real while leaving the ceiling in place, and the ceiling was the problem | A disk adapter as the default; an S3 adapter that only works against AWS |
+| Body type | `Readable \| Buffer` in, a stream out | The files this exists for are print-ready artwork. A `Buffer` signature quietly caps the product at whatever the process can hold, and the cap is discovered in production. `lib-storage` switches to multipart on its own, which a plain `PutObject` cannot | `Buffer` everywhere, with a "we will stream it later" note |
+| Presigned URLs | On the port, not bolted on afterwards | Without them every byte of every upload and download transits the API, and an API that proxies hundreds of megabytes falls over on a busy morning. Adding the methods after call sites existed would have meant rewriting them | Proxying bytes through the API; adding signing when it hurts |
+| Key alphabet | Letters, digits, dot, dash, underscore, slash-separated — narrower than S3 allows | Keys are generated, not typed by a person, and a narrow alphabet is safe in a URL, a path and a log line with no escaping. A customer's filename is *sanitised into* a key rather than used as one | Accepting anything S3 accepts, and discovering which characters break a signed URL later |
+| S3 credentials | Default to the MinIO container's, exactly as `POSTGRES_USER` defaults to the local database's | A clone runs `make db-up` and the suite passes with nothing configured. Setting **both** to empty is the documented way to hand resolution to the SDK's own chain — an instance role or IRSA — which is what production should do | Empty defaults, which fail with "could not load credentials" on a fresh clone |
+| Upload limit location | `MulterModule`, once, from configuration | multer refuses an oversized part while it is still streaming, so the process never holds the whole of a hostile upload. Registered centrally, a route cannot quietly grant itself a bigger budget than the deployment allows | A `limits` option on each `FileInterceptor`; a size check inside the handler, which is already too late |
+| Retry safety | Automatic for GET/HEAD/PUT/DELETE; POST and PATCH opt in | The retry that turns one charge into two is the expensive kind of bug, and the safe default is the one nobody has to remember. A POST carrying an idempotency key the upstream honours can opt back in | One retry count for every method |
+| Breaker scope | One per upstream host | A dead carrier must not suspend calls to the payment gateway. A 4xx never counts — tripping a breaker on our own bad requests takes out a healthy dependency | A single global breaker; counting every non-2xx |
+| Scheduler shutdown | Clears the timers, then awaits work already in flight | Returning immediately leaves a task mid-write against a pool about to be destroyed, still holding its lock so no other replica can take over. Found exactly that way — as an e2e run that would not exit | Clearing the interval and returning |
+| Scheduler failure mode | Fails **closed** | The opposite of the limiter, deliberately. A limiter that fails open loses a safeguard; a lock that fails open runs the nightly billing job on every replica, which is damage done. A skipped tick is recovered by the next one | Fail open for consistency with the limiter |
+| Lock release | Compare-and-delete in Lua | Releasing without checking the holder is the classic defect: A overruns the TTL, the lock expires, B acquires it, A finishes and deletes B's lock — after which both run, which is what the lock existed to prevent | `DEL` on the way out |
+| Delivery record | Written **before** the send | A row that appears only on success cannot describe the send that crashed the process, and that is precisely the case somebody telephones about. One extra write buys a class of failure that is otherwise invisible by construction | Recording the outcome once the transport returns |
+| Mail default | `LogMailer`, reporting itself unconfigured until `MAIL_ENABLED` | "We never sent it" has two causes needing two different fixes — no credentials, which an operator repairs once, and a provider that refused, which a resend repairs. Counting them together hides an outage behind a configuration gap | A no-op mailer that reports success; an SMTP dependency chosen on the kit's behalf |
+| Recipient address | Copied onto the notification when it is queued | A cross-context join would couple this table to identity's, and an address looked up at send time is the address *now*, not the one the customer had when the thing happened | Joining identity at send time |
 | Readiness dependencies | Postgres and Redis required; NATS advisory | The outbox exists so the API keeps accepting writes while the broker is away. Failing readiness there pulls every replica out of rotation for a fault the design already absorbs — a delayed projection becomes a full outage | All three required; NATS omitted from the probe entirely |
 
 ---
@@ -834,6 +849,8 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | OpenAPI — envelope-accurate schemas, error codes, exportable spec |
 | ✅ | Architecture gate (`check-arch.mjs`), 7 rules, verified against real violations |
 | ✅ | Strict TypeScript, eslint, prettier |
+| ✅ | Bounded input — JSON/urlencoded body limit, a multer file cap, and 413 as its own error kind |
+| ✅ | `FileStorage` — streaming S3 adapter (MinIO, R2, Wasabi or AWS), presigned upload and download URLs, traversal-safe keys |
 | ❌ | CI pipeline (GitHub Actions with Postgres, Redis and NATS services) |
 
 ### Persistence
@@ -865,7 +882,7 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | | Item |
 |---|---|
 | ✅ | `identity` — register, get, list, update, soft delete; Argon2id |
-| ✅ | `notification` — durable subscriber proving cross-context reaction |
+| ✅ | `notification` — durable subscriber, plus a delivery record written *before* the send: attempts, last error, `UNCONFIGURED` |
 | ✅ | `owner` + `car` — the worked reference pair (see below) |
 | ✅ | `auth` — ES256, `typ` claim, refresh rotation with replay detection, Redis blacklist |
 | ✅ | Global auth guard, deny by default, `@Public()` opt-out |
@@ -882,6 +899,9 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 | ✅ | Prometheus metrics at `/metrics`, plus a Grafana + Loki stack (`make obs-up`) and alert rules |
 | ✅ | Rate limiting — Redis fixed window, tighter budget on credential routes, fails open |
 | ✅ | API versioning — URI, `/api/v1`, probes and scrape version-neutral |
+| ✅ | Scheduler — tasks discovered like durable handlers, one replica per tick via a Redis lock, fails closed |
+| ✅ | Outbound HTTP — one timeout, one retry policy and a per-host circuit breaker for every integration |
+| ✅ | `Mailer` port with a log adapter and a sweeping dispatcher; a real transport is the provider line |
 | ❌ | Admin / back-office |
 | ❌ | Alertmanager routing (rules exist; where a page goes is a deployment decision) |
 
@@ -916,6 +936,10 @@ To react to another context, add a `DurableEventHandler` in *your* `infrastructu
 **`403 FORBIDDEN` with a perfectly good token.** The token authenticated you; the route wants a permission you do not hold. `GET /api/v1/rbac/me/grants` shows what you have. If it comes back empty on a fresh database, nobody has been made an admin yet — set `SEED_SUPERADMIN_EMAIL`/`_PASSWORD` and run `make seed`.
 
 **A route 403s for everyone, including admin.** It requires a permission that is not in the catalogue, so no role can hold it. Compare the string in `@RequirePermissions()` against `GET /api/v1/rbac/permissions`; a permission has to be created before a route can ask for it.
+
+**`STORAGE_UNAVAILABLE`, and the log says "could not load credentials from any providers".** Both `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are empty, which deliberately hands resolution to the AWS SDK's own chain — correct in production behind an instance role, and nothing at all on a laptop. Set them to the MinIO defaults, or start the container with `make db-up`.
+
+**`STORAGE_UNAVAILABLE` against a bucket that exists.** Two usual causes. `S3_FORCE_PATH_STYLE` must be `true` for MinIO and most self-hosted stores, which cannot do virtual-host addressing without wildcard DNS. And `S3_ENDPOINT` is `http://minio:9000` *inside* the compose network but `http://localhost:9000` from the host — running the app with `pnpm start:dev` against the container needs the latter.
 
 **Boot fails reading `certs/private.pem`.** Run `make keygen`. The keypair is gitignored, so every clone and every CI run needs its own.
 

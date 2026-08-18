@@ -28,6 +28,7 @@ export class WelcomeOnUserRegistered extends DurableEventHandler {
     await this.notifications.save(
       Notification.queue(
         userUuid,
+        email,
         'email',
         'Welcome',
         `Welcome, ${email}. Your account is pending activation.`,

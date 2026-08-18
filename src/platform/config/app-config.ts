@@ -68,6 +68,61 @@ export class AppConfig {
     };
   }
 
+  get storage() {
+    return {
+      uploadMaxBytes: this.get('UPLOAD_MAX_BYTES'),
+    };
+  }
+
+  get s3() {
+    return {
+      endpoint: this.get('S3_ENDPOINT'),
+      region: this.get('S3_REGION'),
+      bucket: this.get('S3_BUCKET'),
+      accessKeyId: this.get('S3_ACCESS_KEY_ID'),
+      secretAccessKey: this.get('S3_SECRET_ACCESS_KEY'),
+      forcePathStyle: this.get('S3_FORCE_PATH_STYLE'),
+      presignExpirySeconds: this.get('S3_PRESIGN_EXPIRY_SECONDS'),
+    };
+  }
+
+  get mail() {
+    return {
+      enabled: this.get('MAIL_ENABLED'),
+      from: this.get('MAIL_FROM'),
+    };
+  }
+
+  get notifications() {
+    return {
+      intervalMs: this.get('NOTIFICATION_DISPATCH_INTERVAL_MS'),
+      batch: this.get('NOTIFICATION_DISPATCH_BATCH'),
+      maxAttempts: this.get('NOTIFICATION_MAX_ATTEMPTS'),
+    };
+  }
+
+  get scheduler() {
+    return {
+      enabled: this.get('SCHEDULER_ENABLED'),
+      lockTtlMs: this.get('SCHEDULER_LOCK_TTL_MS'),
+    };
+  }
+
+  get upstream() {
+    return {
+      timeoutMs: this.get('UPSTREAM_TIMEOUT_MS'),
+      maxAttempts: this.get('UPSTREAM_MAX_ATTEMPTS'),
+      retryBaseMs: this.get('UPSTREAM_RETRY_BASE_MS'),
+      retryMaxMs: this.get('UPSTREAM_RETRY_MAX_MS'),
+      breakerThreshold: this.get('UPSTREAM_BREAKER_THRESHOLD'),
+      breakerResetMs: this.get('UPSTREAM_BREAKER_RESET_MS'),
+    };
+  }
+
+  get bodyLimit(): string {
+    return this.get('BODY_LIMIT');
+  }
+
   get version(): string {
     return this.get('APP_VERSION');
   }

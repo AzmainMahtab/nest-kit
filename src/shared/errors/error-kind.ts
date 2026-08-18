@@ -4,6 +4,7 @@ export const ErrorKind = {
   Invalid: 'INVALID',
   Unauthorized: 'UNAUTHORIZED',
   Forbidden: 'FORBIDDEN',
+  PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   RateLimited: 'RATE_LIMITED',
   Internal: 'INTERNAL',
 } as const;
@@ -16,6 +17,7 @@ export const ERROR_KIND_STATUS: Record<ErrorKind, number> = {
   [ErrorKind.Invalid]: 400,
   [ErrorKind.Unauthorized]: 401,
   [ErrorKind.Forbidden]: 403,
+  [ErrorKind.PayloadTooLarge]: 413,
   [ErrorKind.RateLimited]: 429,
   [ErrorKind.Internal]: 500,
 };
